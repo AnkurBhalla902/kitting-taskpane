@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Kitting Flow</title>
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="taskpane.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo">K</div>
+        <div>
+          <h1>Kitting Flow</h1>
+          <p class="subtitle">All Data — friendly view</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <button id="new-row-btn" class="btn-primary" title="Add a new row to the All Data sheet">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8"><path d="M12 5v14M5 12h14"/></svg>
+          New
+        </button>
+        <button id="refresh-btn" class="btn-secondary" title="Re-read the All Data sheet">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
+          Refresh
+        </button>
+      </div>
+    </header>
+
+    <section class="controls">
+      <div class="search-wrap">
+        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input id="search" type="search" placeholder="Search module, hospital, SAP serial, comments…" />
+        <span id="result-count" class="result-count"></span>
+      </div>
+
+      <div class="filter-row">
+        <select id="filter-bu" class="filter">
+          <option value="">All Business Units</option>
+        </select>
+        <select id="filter-status" class="filter">
+          <option value="">All Statuses</option>
+        </select>
+        <select id="filter-can-ship" class="filter">
+          <option value="">Ship status (any)</option>
+        </select>
+        <button id="clear-filters" class="btn-link">Clear</button>
+      </div>
+    </section>
+
+    <main id="results">
+      <div id="empty-state" class="empty-state">
+        <p>Loading data from "All Data" sheet…</p>
+      </div>
+      <div id="rows-container" class="rows-container hidden"></div>
+      <div id="pagination" class="pagination hidden">
+        <button id="prev-page" class="btn-secondary">‹ Prev</button>
+        <span id="page-info"></span>
+        <button id="next-page" class="btn-secondary">Next ›</button>
+      </div>
+    </main>
+
+    <!-- Detail / edit drawer -->
+    <aside id="detail-drawer" class="drawer hidden">
+      <div class="drawer-header">
+        <h2 id="detail-title">Module details</h2>
+        <button id="close-drawer" class="btn-icon" aria-label="Close">×</button>
+      </div>
+      <div class="drawer-body">
+        <div id="detail-fields"></div>
+      </div>
+      <div class="drawer-footer">
+        <button id="cancel-edit" class="btn-secondary">Cancel</button>
+        <button id="save-edit" class="btn-primary">Save changes</button>
+      </div>
+      <div id="validation-msg" class="validation-msg hidden"></div>
+    </aside>
+
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script src="taskpane.js"></script>
+</body>
+</html>
