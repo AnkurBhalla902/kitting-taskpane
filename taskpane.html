@@ -15,55 +15,91 @@
         <div class="logo">K</div>
         <div>
           <h1>Kitting Flow</h1>
-          <p class="subtitle">All Data — friendly view</p>
+          <p class="subtitle" id="subtitle">All Data — friendly view</p>
         </div>
       </div>
       <div class="header-actions">
-        <button id="new-row-btn" class="btn-primary" title="Add a new row to the All Data sheet">
+        <button id="new-row-btn" class="btn-primary" title="Add a new row">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8"><path d="M12 5v14M5 12h14"/></svg>
           New
         </button>
         <button id="refresh-btn" class="btn-secondary" title="Re-read the All Data sheet">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-          Refresh
         </button>
       </div>
     </header>
 
-    <section class="controls">
-      <div class="search-wrap">
-        <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-        <input id="search" type="search" placeholder="Search module, hospital, SAP serial, comments…" />
-        <span id="result-count" class="result-count"></span>
+    <nav class="tab-bar">
+      <button class="tab active" data-view="browse">Browse</button>
+      <button class="tab" data-view="dashboard">Dashboard</button>
+      <button class="tab" data-view="week">Week view</button>
+    </nav>
+
+    <!-- BROWSE VIEW -->
+    <section id="view-browse" class="view active">
+      <div class="controls">
+        <div class="search-wrap">
+          <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input id="search" type="search" placeholder="Search loanset, module, hospital, PO, FID, SAP serial…" />
+          <span id="result-count" class="result-count"></span>
+        </div>
+
+        <div class="filter-row">
+          <select id="filter-bu" class="filter"><option value="">All Business Units</option></select>
+          <select id="filter-consign" class="filter"><option value="">Any consignment status</option></select>
+          <select id="filter-object-type" class="filter"><option value="">Any object type</option></select>
+          <select id="filter-bek" class="filter"><option value="">Any BEK status</option></select>
+          <select id="filter-fol" class="filter"><option value="">Any FOL status</option></select>
+        </div>
+
+        <div class="quick-row">
+          <label class="quick-toggle">
+            <input type="checkbox" id="hide-shipped" checked />
+            Hide shipped / #REF!
+          </label>
+          <label class="quick-toggle">
+            <input type="checkbox" id="only-issues" />
+            Only issues
+          </label>
+          <span class="spacer"></span>
+          <button id="clear-filters" class="btn-link">Clear</button>
+        </div>
       </div>
 
-      <div class="filter-row">
-        <select id="filter-bu" class="filter">
-          <option value="">All Business Units</option>
-        </select>
-        <select id="filter-status" class="filter">
-          <option value="">All Statuses</option>
-        </select>
-        <select id="filter-can-ship" class="filter">
-          <option value="">Ship status (any)</option>
-        </select>
-        <button id="clear-filters" class="btn-link">Clear</button>
+      <main id="results">
+        <div id="empty-state" class="empty-state">
+          <p>Loading data from "All Data" sheet…</p>
+        </div>
+        <div id="rows-container" class="rows-container hidden"></div>
+        <div id="pagination" class="pagination hidden">
+          <button id="prev-page" class="btn-secondary">‹ Prev</button>
+          <span id="page-info"></span>
+          <button id="next-page" class="btn-secondary">Next ›</button>
+        </div>
+      </main>
+    </section>
+
+    <!-- DASHBOARD VIEW -->
+    <section id="view-dashboard" class="view">
+      <div id="dashboard-content" class="dashboard">
+        <p class="empty-state">Load data to see dashboard.</p>
       </div>
     </section>
 
-    <main id="results">
-      <div id="empty-state" class="empty-state">
-        <p>Loading data from "All Data" sheet…</p>
+    <!-- WEEK VIEW -->
+    <section id="view-week" class="view">
+      <div class="week-header">
+        <div>
+          <strong id="week-current-label">Current week</strong>
+          <span class="muted" id="week-config-info"></span>
+        </div>
+        <button id="week-refresh" class="btn-link">Re-calculate</button>
       </div>
-      <div id="rows-container" class="rows-container hidden"></div>
-      <div id="pagination" class="pagination hidden">
-        <button id="prev-page" class="btn-secondary">‹ Prev</button>
-        <span id="page-info"></span>
-        <button id="next-page" class="btn-secondary">Next ›</button>
+      <div id="week-columns" class="week-columns">
+        <p class="empty-state">Load data to see week view.</p>
       </div>
-    </main>
+    </section>
 
-    <!-- Detail / edit drawer -->
     <aside id="detail-drawer" class="drawer hidden">
       <div class="drawer-header">
         <h2 id="detail-title">Module details</h2>
