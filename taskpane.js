@@ -147,44 +147,93 @@ function bindUi() {
 }
 
 // --- Data loading ---------------------------------------------------------
+// Excel's JS API caps the data returned per call (~5 MB / ~1 M cells).
+// Your "All Data" sheet is ~15k rows × 78 cols ≈ 1.2M cells — too big in one shot.
+// So we read the dimensions first, then pull the data in row-chunks.
+const CHUNK_ROWS = 2000;  // rows per request — safe under the limit
+
 async function loadData() {
   showEmpty("Loading data from \"" + SHEET_NAME + "\" sheet…");
+  allRows = [];
+  allHeaders = [];
+  headerIndex = {};
+
   try {
+    // Step 1: figure out the sheet's used range dimensions (cheap call)
+    let totalRows = 0;
+    let totalCols = 0;
+    let startRow = 0; // 0-based row index of the used range
+    let startCol = 0;
+
     await Excel.run(async (ctx) => {
       const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
-      const used = sheet.getUsedRange(true /*valuesOnly*/);
-      used.load(["values", "rowCount", "columnCount", "rowIndex"]);
+      const used = sheet.getUsedRange(true);
+      used.load(["rowCount", "columnCount", "rowIndex", "columnIndex"]);
       await ctx.sync();
-
-      if (!used.values || used.values.length < 2) {
-        allHeaders = []; allRows = [];
-        showEmpty("The \"" + SHEET_NAME + "\" sheet is empty.");
-        return;
-      }
-
-      allHeaders = used.values[0].map((h) => (h === null ? "" : String(h)));
-      headerIndex = {};
-      allHeaders.forEach((h, i) => { headerIndex[h] = i; });
-
-      // Row index 0 is the header. Sheet row = used.rowIndex + i + 1
-      const baseRow = used.rowIndex + 1; // sheet row of first data row (1-based)
-      allRows = [];
-      for (let i = 1; i < used.values.length; i++) {
-        const row = used.values[i];
-        // Skip rows that are fully empty
-        const hasValue = row.some((v) => v !== "" && v !== null && v !== undefined);
-        if (!hasValue) continue;
-        const obj = { _row: baseRow + i };
-        for (let c = 0; c < allHeaders.length; c++) {
-          obj[allHeaders[c]] = row[c];
-        }
-        allRows.push(obj);
-      }
+      totalRows = used.rowCount;
+      totalCols = used.columnCount;
+      startRow = used.rowIndex;
+      startCol = used.columnIndex;
     });
+
+    if (totalRows < 2) {
+      showEmpty("The \"" + SHEET_NAME + "\" sheet is empty.");
+      return;
+    }
+
+    // Step 2: read the header row separately
+    await Excel.run(async (ctx) => {
+      const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
+      const headerAddr =
+        colLetter(startCol) + (startRow + 1) +
+        ":" + colLetter(startCol + totalCols - 1) + (startRow + 1);
+      const headerRange = sheet.getRange(headerAddr);
+      headerRange.load("values");
+      await ctx.sync();
+      allHeaders = headerRange.values[0].map((h) => (h === null ? "" : String(h)));
+      allHeaders.forEach((h, i) => { headerIndex[h] = i; });
+    });
+
+    // Step 3: read the data rows in chunks
+    const dataRows = totalRows - 1; // exclude header
+    const firstDataRow = startRow + 2; // 1-based sheet row of first data row
+    let loaded = 0;
+
+    for (let offset = 0; offset < dataRows; offset += CHUNK_ROWS) {
+      const chunkSize = Math.min(CHUNK_ROWS, dataRows - offset);
+      const firstRow = firstDataRow + offset;
+      const lastRow = firstRow + chunkSize - 1;
+
+      await Excel.run(async (ctx) => {
+        const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
+        const addr =
+          colLetter(startCol) + firstRow +
+          ":" + colLetter(startCol + totalCols - 1) + lastRow;
+        const range = sheet.getRange(addr);
+        range.load("values");
+        await ctx.sync();
+
+        const values = range.values;
+        for (let i = 0; i < values.length; i++) {
+          const row = values[i];
+          const hasValue = row.some((v) => v !== "" && v !== null && v !== undefined);
+          if (!hasValue) continue;
+          const obj = { _row: firstRow + i };
+          for (let c = 0; c < allHeaders.length; c++) {
+            obj[allHeaders[c]] = row[c];
+          }
+          allRows.push(obj);
+        }
+      });
+
+      loaded += chunkSize;
+      const pct = Math.round((loaded / dataRows) * 100);
+      showEmpty("Loading… " + pct + "% (" + allRows.length.toLocaleString() + " rows so far)");
+    }
 
     populateFilterDropdowns();
     applyFilters();
-    showToast("Loaded " + allRows.length + " rows", "success");
+    showToast("Loaded " + allRows.length.toLocaleString() + " rows", "success");
   } catch (err) {
     console.error(err);
     showEmpty("Couldn't load data. Make sure the sheet is named exactly \"" + SHEET_NAME + "\".");
