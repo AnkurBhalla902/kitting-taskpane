@@ -265,7 +265,7 @@ async function loadData() {
           chunkNonEmpty++;
           const obj = { _row: a + i };
           for (let c = 0; c < allHeaders.length; c++) {
-            obj[allHeaders[c]] = row[c];
+            obj[allHeaders[c]] = normalizeCellValue(allHeaders[c], row[c]);
           }
           allRows.push(obj);
         }
@@ -1028,6 +1028,69 @@ function isoWeek(d) {
 // =========================================================================
 // HELPERS
 // =========================================================================
+// Excel stores dates as days-since-1900-01-01 (with a known leap-year bug).
+// 45323 -> Jan 1 2024 etc. Returns a JS Date or null.
+function excelSerialToDate(n) {
+  if (typeof n !== "number" || !isFinite(n)) return null;
+  if (n < 1 || n > 200000) return null; // sanity: rule out non-dates
+  // Excel's epoch is 1899-12-30 (accounts for 1900 leap year bug)
+  const ms = (n - 25569) * 86400 * 1000;
+  const d = new Date(ms);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
+const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+// "45323" -> "Jan-24"   (used for ForecastMonth column)
+function serialToMonthYear(n) {
+  const d = excelSerialToDate(n);
+  if (!d) return null;
+  const yy = String(d.getUTCFullYear()).slice(-2);
+  return MONTH_ABBR[d.getUTCMonth()] + "-" + yy;
+}
+
+// "45323" -> "01-Jan-24"  (used for general date-looking values)
+function serialToDateStr(n) {
+  const d = excelSerialToDate(n);
+  if (!d) return null;
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const yy = String(d.getUTCFullYear()).slice(-2);
+  return dd + "-" + MONTH_ABBR[d.getUTCMonth()] + "-" + yy;
+}
+
+// Columns whose values should be interpreted as month-year (e.g. "Jan-25")
+const MONTH_YEAR_COLUMNS = new Set(["ForecastMonth"]);
+
+// Columns whose values should be interpreted as date strings (e.g. "01-Jan-24")
+const DATE_COLUMNS = new Set([
+  "RequestedShipDate",
+  "Approved to bring kit in incomplete (Date & initial)",
+  "Date 9SE1 actually raised",
+  "Shipment Date (Also look at auto column)",
+  "Anchor Shipment Date (Auto)",
+  "JDE Requested Date 06.06.24 (Auto)",
+  "TECA Shipment Date ",
+  "TECA BO FULFILMRNT DATE  ",
+]);
+
+// Normalize a raw cell value into what the UI should display.
+// Numbers in date-y columns get formatted; everything else passes through.
+function normalizeCellValue(colName, raw) {
+  if (raw === null || raw === undefined || raw === "") return raw;
+  if (typeof raw === "number") {
+    if (MONTH_YEAR_COLUMNS.has(colName)) {
+      const s = serialToMonthYear(raw);
+      if (s) return s;
+    }
+    if (DATE_COLUMNS.has(colName)) {
+      const s = serialToDateStr(raw);
+      if (s) return s;
+    }
+  }
+  return raw;
+}
+
 function colLetter(idx) {
   let s = ""; let n = idx;
   while (n >= 0) {
