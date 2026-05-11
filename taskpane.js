@@ -1,24 +1,69 @@
 /* ───────────────────────────────────────── */
-/*  Kitting Flow — task pane logic           */
+/*  Kitting Flow v2 — task pane logic        */
 /* ───────────────────────────────────────── */
 
-// --- Configuration --------------------------------------------------------
-// Edit this list to change which columns appear. Names must match the headers
-// in the "All Data" sheet exactly (trailing spaces matter).
+// =========================================================================
+// CONFIG  — most things you'd tweak live here at the top
+// =========================================================================
 
 const SHEET_NAME = "All Data";
 
-// Columns shown on each row card (key info)
+// Data range — DO NOT use getUsedRange (phantom formatting in this file).
+const DATA_FIRST_COL = "A";
+const DATA_LAST_COL = "AX";   // 50 real columns
+const HEADER_ROW = 1;
+const MAX_DATA_ROW = 20000;
+const CHUNK_ROWS = 500;
+
+// What appears on each Browse card
 const CARD_FIELDS = {
-  primary: "JDE Module",          // big bold line
-  secondary: "JDE Description",   // small line under it
-  group: "Business Unit",         // chip top-right
-  hospital: "Hospital",           // shown in the middle line
-  status: "Status",               // colored chip
-  canShip: "Can Module Ship?",    // colored chip
+  primary:   "JDE Module",
+  secondary: "JDE Description",
+  group:     "Business Unit",
+  hospital:  "Hospital",
+  status:    "Status",
+  canShip:   "Can Module Ship?",
 };
 
-// Columns shown in the detail drawer, grouped. Add or remove freely.
+// Fields the search bar looks across
+const SEARCH_FIELDS = [
+  "JDE Module", "JDE Description", "JDE Build number", "Module_Build",
+  "SAP Module", "SAP Serial Number", "SAP Description",
+  "Hospital", "HospitalContact",
+  "Loanset", "Set Reference", "Anchor Unique Reference (Auto)",
+  "9SE1 order number", "PO", "FID ",
+  "YU /PR", "Allocated Country",
+  "Ordering Comment ", "S&OP COMMENTS", "Kit build comments",
+  "BEK Ordering Issue (comments)",
+];
+
+// Top-of-page filter dropdowns
+const FILTER_DROPDOWNS = [
+  { id: "filter-bu",          column: "Business Unit", limit: 30 },
+  { id: "filter-consign",     column: "SAP Equipment Monitor Status (AUTO)", limit: 15 },
+  { id: "filter-object-type", column: "SAP Object Type (Auto)", limit: 15 },
+  { id: "filter-bek",         column: "BEK Status (Auto)", limit: 15 },
+  { id: "filter-fol",         column: "FOL Status (Auto)", limit: 15 },
+];
+
+// Values considered "hidden by default" — anything matching these in Status
+// is suppressed when the "Hide shipped / #REF!" toggle is on.
+const HIDDEN_STATUSES = ["EQUIPMENT SHIPPED", "EQUIPMENT DISSOLVED", "#REF!"];
+
+// What counts as an "issue" for the Only-issues toggle
+function rowIsIssue(row) {
+  const bek = String(row["BEK Status (Auto)"] || "");
+  const ship = String(row["Can Module Ship?"] || "");
+  const issueLoc = String(row["ISSUE LOCATION (Auto)"] || "");
+  const status = String(row["Status"] || "");
+  if (bek === "Incomplete" || bek === "Do not ship") return true;
+  if (ship === "FALSE") return true;
+  if (issueLoc && issueLoc !== "NO CURRENT KNOWN ISSUE OR AWAITING REFILL") return true;
+  if (status.includes("ISSUE")) return true;
+  return false;
+}
+
+// Drawer field groups (unchanged from v1 mostly)
 const DETAIL_GROUPS = [
   {
     title: "Identification",
@@ -26,10 +71,12 @@ const DETAIL_GROUPS = [
       { name: "JDE Module", editable: false },
       { name: "JDE Description", editable: false },
       { name: "JDE Build number", editable: false },
+      { name: "Module_Build", editable: false },
       { name: "SAP Module", editable: false },
       { name: "SAP Serial Number", editable: false },
       { name: "SAP Description", editable: false },
       { name: "Business Unit", editable: false },
+      { name: "Loanset", editable: false },
     ],
   },
   {
@@ -37,11 +84,14 @@ const DETAIL_GROUPS = [
     fields: [
       { name: "Status", editable: true },
       { name: "Equipment status", editable: true },
-      { name: "Anchor Status (Auto)", editable: false },
       { name: "BEK Status (Auto)", editable: false },
       { name: "Can Module Ship?", editable: true },
       { name: "FOL Status (Auto)", editable: false },
       { name: "Completion Percentage", editable: false },
+      { name: "SAP Equipment Monitor Status (AUTO)", editable: false },
+      { name: "SAP Object Type (Auto)", editable: false },
+      { name: "SAP Storage Location (Auto)", editable: false },
+      { name: "ISSUE LOCATION (Auto)", editable: false },
     ],
   },
   {
@@ -50,9 +100,9 @@ const DETAIL_GROUPS = [
       { name: "Hospital", editable: true },
       { name: "Allocated Country", editable: true },
       { name: "HospitalContact", editable: true },
-      { name: "RequestedShipDate", editable: true },
       { name: "Final Shipment Week", editable: true },
-      { name: "Shipment Route", editable: true },
+      { name: "Set Reference", editable: true },
+      { name: "FID ", editable: true },
     ],
   },
   {
@@ -61,8 +111,10 @@ const DETAIL_GROUPS = [
       { name: "Week To Raise Inbound", editable: true },
       { name: "9SE1 order number", editable: true },
       { name: "PO", editable: true },
+      { name: "YU /PR", editable: true },
       { name: "Week Inbound Raised", editable: true },
       { name: "Requested By", editable: true },
+      { name: "Raise 9SE2", editable: true },
     ],
   },
   {
@@ -76,52 +128,47 @@ const DETAIL_GROUPS = [
   },
 ];
 
+const NEW_ROW_FIELDS = [
+  { name: "JDE Module", required: true },
+  { name: "JDE Description", required: true },
+  { name: "Business Unit", required: true },
+  { name: "Hospital", required: true },
+  { name: "JDE Build number", required: false },
+  { name: "SAP Module", required: false },
+  { name: "SAP Serial Number", required: false },
+  { name: "Loanset", required: false },
+  { name: "Allocated Country", required: false },
+  { name: "Status", required: false },
+  { name: "Quantity in Module", required: false },
+  { name: "Final Shipment Week", required: false },
+  { name: "Requested By", required: false },
+  { name: "9SE1 order number", required: false },
+  { name: "PO", required: false },
+  { name: "Ordering Comment ", required: false, multiline: true },
+  { name: "S&OP COMMENTS", required: false, multiline: true },
+];
+
 const PAGE_SIZE = 50;
 
-// Fields to show when creating a brand-new row.
-// `required: true` means the user must fill it in before saving.
-// Any field name here must also exist in the All Data sheet headers.
-const NEW_ROW_FIELDS = [
-  { name: "JDE Module",          required: true },
-  { name: "JDE Description",     required: true },
-  { name: "Business Unit",       required: true },
-  { name: "Hospital",            required: true },
-  { name: "JDE Build number",    required: false },
-  { name: "SAP Module",          required: false },
-  { name: "SAP Serial Number",   required: false },
-  { name: "SAP Description",     required: false },
-  { name: "Allocated Country",   required: false },
-  { name: "Status",              required: false },
-  { name: "Equipment status",    required: false },
-  { name: "Quantity in Module",  required: false },
-  { name: "Final Shipment Week", required: false },
-  { name: "RequestedShipDate",   required: false },
-  { name: "Requested By",        required: false },
-  { name: "9SE1 order number",   required: false },
-  { name: "PO",                  required: false },
-  { name: "Ordering Comment ",   required: false, multiline: true },
-  { name: "S&OP COMMENTS",       required: false, multiline: true },
-  { name: "Kit build comments",  required: false, multiline: true },
-];
+// Week view: how many weeks in the future to bucket separately
+const WEEK_LOOK_AHEAD = 4;
 
-// Filters that drive the dropdowns above the search results
-const FILTER_DROPDOWNS = [
-  { id: "filter-bu",       column: "Business Unit",   limit: 30 },
-  { id: "filter-status",   column: "Status",          limit: 30 },
-  { id: "filter-can-ship", column: "Can Module Ship?", limit: 20 },
-];
-
-// --- State ----------------------------------------------------------------
-let allHeaders = [];        // header names in order
-let headerIndex = {};       // header name -> column index
-let allRows = [];           // each row: { _row: <sheet row 1-based>, [header]: value }
+// =========================================================================
+// STATE
+// =========================================================================
+let allHeaders = [];
+let headerIndex = {};
+let allRows = [];
 let filteredRows = [];
 let currentPage = 0;
-let editingRow = null;      // row currently in the drawer
-let editedValues = {};      // { columnName: newValue }
-let isCreating = false;     // true when drawer is in create-new mode
+let editingRow = null;
+let editedValues = {};
+let isCreating = false;
+let currentView = "browse";
 
-// --- Office bootstrap -----------------------------------------------------
+// =========================================================================
+// BOOTSTRAP
+// =========================================================================
 Office.onReady((info) => {
   if (info.host !== Office.HostType.Excel) {
     showToast("This add-in must run in Excel.", "error");
@@ -134,81 +181,78 @@ Office.onReady((info) => {
 function bindUi() {
   document.getElementById("refresh-btn").addEventListener("click", loadData);
   document.getElementById("new-row-btn").addEventListener("click", openCreateDrawer);
+
+  // Tabs
+  document.querySelectorAll(".tab").forEach((t) => {
+    t.addEventListener("click", () => switchView(t.dataset.view));
+  });
+
+  // Search & filters
   document.getElementById("search").addEventListener("input", debounce(applyFilters, 200));
   document.getElementById("clear-filters").addEventListener("click", clearFilters);
+  document.getElementById("hide-shipped").addEventListener("change", applyFilters);
+  document.getElementById("only-issues").addEventListener("change", applyFilters);
   FILTER_DROPDOWNS.forEach((f) => {
     document.getElementById(f.id).addEventListener("change", applyFilters);
   });
+
   document.getElementById("prev-page").addEventListener("click", () => { currentPage--; renderRows(); });
   document.getElementById("next-page").addEventListener("click", () => { currentPage++; renderRows(); });
+
   document.getElementById("close-drawer").addEventListener("click", closeDrawer);
   document.getElementById("cancel-edit").addEventListener("click", closeDrawer);
   document.getElementById("save-edit").addEventListener("click", onSaveClick);
+
+  document.getElementById("week-refresh").addEventListener("click", renderWeekView);
 }
 
-// --- Data loading ---------------------------------------------------------
-// Excel's JS API caps the data returned per call (~5 MB / ~1 M cells).
-// Your "All Data" sheet is ~15k rows × 78 cols ≈ 1.2M cells — too big in one shot.
-// So we read the dimensions first, then pull the data in row-chunks.
-const CHUNK_ROWS = 2000;  // rows per request — safe under the limit
+function switchView(name) {
+  currentView = name;
+  document.querySelectorAll(".tab").forEach((t) => {
+    t.classList.toggle("active", t.dataset.view === name);
+  });
+  document.querySelectorAll(".view").forEach((v) => {
+    v.classList.toggle("active", v.id === "view-" + name);
+  });
+  if (name === "dashboard") renderDashboard();
+  if (name === "week") renderWeekView();
+}
 
+// =========================================================================
+// DATA LOADING
+// =========================================================================
 async function loadData() {
-  showEmpty("Loading data from \"" + SHEET_NAME + "\" sheet…");
+  showEmpty("Initialising…");
   allRows = [];
   allHeaders = [];
   headerIndex = {};
 
   try {
-    // Step 1: figure out the sheet's used range dimensions (cheap call)
-    let totalRows = 0;
-    let totalCols = 0;
-    let startRow = 0; // 0-based row index of the used range
-    let startCol = 0;
-
+    showEmpty("Reading headers…");
     await Excel.run(async (ctx) => {
       const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
-      const used = sheet.getUsedRange(true);
-      used.load(["rowCount", "columnCount", "rowIndex", "columnIndex"]);
+      const addr = DATA_FIRST_COL + HEADER_ROW + ":" + DATA_LAST_COL + HEADER_ROW;
+      const range = sheet.getRange(addr);
+      range.load("values");
       await ctx.sync();
-      totalRows = used.rowCount;
-      totalCols = used.columnCount;
-      startRow = used.rowIndex;
-      startCol = used.columnIndex;
-    });
-
-    if (totalRows < 2) {
-      showEmpty("The \"" + SHEET_NAME + "\" sheet is empty.");
-      return;
-    }
-
-    // Step 2: read the header row separately
-    await Excel.run(async (ctx) => {
-      const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
-      const headerAddr =
-        colLetter(startCol) + (startRow + 1) +
-        ":" + colLetter(startCol + totalCols - 1) + (startRow + 1);
-      const headerRange = sheet.getRange(headerAddr);
-      headerRange.load("values");
-      await ctx.sync();
-      allHeaders = headerRange.values[0].map((h) => (h === null ? "" : String(h)));
+      allHeaders = range.values[0].map((h) => (h === null ? "" : String(h)));
       allHeaders.forEach((h, i) => { headerIndex[h] = i; });
     });
 
-    // Step 3: read the data rows in chunks
-    const dataRows = totalRows - 1; // exclude header
-    const firstDataRow = startRow + 2; // 1-based sheet row of first data row
-    let loaded = 0;
+    const firstDataRow = HEADER_ROW + 1;
+    let offset = 0;
+    let emptyStreak = 0;
+    const EMPTY_STREAK_LIMIT = 3;
 
-    for (let offset = 0; offset < dataRows; offset += CHUNK_ROWS) {
-      const chunkSize = Math.min(CHUNK_ROWS, dataRows - offset);
-      const firstRow = firstDataRow + offset;
-      const lastRow = firstRow + chunkSize - 1;
+    while (offset < MAX_DATA_ROW - firstDataRow) {
+      const size = Math.min(CHUNK_ROWS, MAX_DATA_ROW - firstDataRow - offset);
+      const a = firstDataRow + offset;
+      const b = a + size - 1;
+      let chunkNonEmpty = 0;
 
       await Excel.run(async (ctx) => {
         const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
-        const addr =
-          colLetter(startCol) + firstRow +
-          ":" + colLetter(startCol + totalCols - 1) + lastRow;
+        const addr = DATA_FIRST_COL + a + ":" + DATA_LAST_COL + b;
         const range = sheet.getRange(addr);
         range.load("values");
         await ctx.sync();
@@ -218,7 +262,8 @@ async function loadData() {
           const row = values[i];
           const hasValue = row.some((v) => v !== "" && v !== null && v !== undefined);
           if (!hasValue) continue;
-          const obj = { _row: firstRow + i };
+          chunkNonEmpty++;
+          const obj = { _row: a + i };
           for (let c = 0; c < allHeaders.length; c++) {
             obj[allHeaders[c]] = row[c];
           }
@@ -226,26 +271,35 @@ async function loadData() {
         }
       });
 
-      loaded += chunkSize;
-      const pct = Math.round((loaded / dataRows) * 100);
-      showEmpty("Loading… " + pct + "% (" + allRows.length.toLocaleString() + " rows so far)");
+      offset += size;
+      if (chunkNonEmpty === 0) {
+        emptyStreak++;
+        if (emptyStreak >= EMPTY_STREAK_LIMIT) break;
+      } else {
+        emptyStreak = 0;
+      }
+      const approxPct = Math.min(99, Math.round((allRows.length / 16000) * 100));
+      showEmpty("Loading… ~" + approxPct + "% (" + allRows.length.toLocaleString() + " rows)");
     }
 
     populateFilterDropdowns();
     applyFilters();
+    if (currentView === "dashboard") renderDashboard();
+    if (currentView === "week") renderWeekView();
     showToast("Loaded " + allRows.length.toLocaleString() + " rows", "success");
   } catch (err) {
     console.error(err);
-    showEmpty("Couldn't load data. Make sure the sheet is named exactly \"" + SHEET_NAME + "\".");
+    showEmpty("Couldn't load data. " + (err.message || err));
     showToast("Load failed: " + (err.message || err), "error");
   }
 }
 
-// --- Filters & search -----------------------------------------------------
+// =========================================================================
+// FILTERS
+// =========================================================================
 function populateFilterDropdowns() {
   FILTER_DROPDOWNS.forEach((f) => {
     const el = document.getElementById(f.id);
-    // preserve the first "All ..." option, clear the rest
     const first = el.querySelector("option");
     el.innerHTML = "";
     el.appendChild(first);
@@ -254,11 +308,10 @@ function populateFilterDropdowns() {
       const v = row[f.column];
       if (v === undefined || v === null || v === "") continue;
       const s = String(v);
-      if (seen.has(s)) continue;
-      seen.add(s);
-      if (seen.size > f.limit) break;
+      if (s === "#REF!") continue;
+      if (!seen.has(s)) seen.add(s);
     }
-    [...seen].sort().forEach((v) => {
+    [...seen].sort().slice(0, f.limit).forEach((v) => {
       const opt = document.createElement("option");
       opt.value = v; opt.textContent = v;
       el.appendChild(opt);
@@ -268,12 +321,16 @@ function populateFilterDropdowns() {
 
 function clearFilters() {
   document.getElementById("search").value = "";
+  document.getElementById("hide-shipped").checked = true;
+  document.getElementById("only-issues").checked = false;
   FILTER_DROPDOWNS.forEach((f) => { document.getElementById(f.id).value = ""; });
   applyFilters();
 }
 
 function applyFilters() {
   const q = document.getElementById("search").value.trim().toLowerCase();
+  const hideShipped = document.getElementById("hide-shipped").checked;
+  const onlyIssues = document.getElementById("only-issues").checked;
   const filterValues = {};
   FILTER_DROPDOWNS.forEach((f) => {
     const v = document.getElementById(f.id).value;
@@ -281,18 +338,18 @@ function applyFilters() {
   });
 
   filteredRows = allRows.filter((row) => {
+    if (hideShipped) {
+      const status = String(row["Status"] || "");
+      if (HIDDEN_STATUSES.includes(status)) return false;
+    }
+    if (onlyIssues && !rowIsIssue(row)) return false;
     for (const col of Object.keys(filterValues)) {
       if (String(row[col] ?? "") !== filterValues[col]) return false;
     }
     if (q) {
-      // search across the most useful text fields
-      const haystack = [
-        row[CARD_FIELDS.primary], row[CARD_FIELDS.secondary],
-        row["SAP Module"], row["SAP Serial Number"], row["SAP Description"],
-        row["Hospital"], row["Allocated Country"], row["JDE Build number"],
-        row["Set Reference"], row["9SE1 order number"], row["PO"],
-        row["Ordering Comment "], row["S&OP COMMENTS"], row["Kit build comments"],
-      ].map((v) => (v == null ? "" : String(v).toLowerCase())).join(" | ");
+      const haystack = SEARCH_FIELDS
+        .map((f) => row[f] == null ? "" : String(row[f]).toLowerCase())
+        .join(" | ");
       if (!haystack.includes(q)) return false;
     }
     return true;
@@ -302,20 +359,22 @@ function applyFilters() {
   renderRows();
 }
 
-// --- Rendering ------------------------------------------------------------
+// =========================================================================
+// BROWSE RENDER
+// =========================================================================
 function renderRows() {
   const container = document.getElementById("rows-container");
   const empty = document.getElementById("empty-state");
   const pag = document.getElementById("pagination");
   const count = document.getElementById("result-count");
 
-  count.textContent = filteredRows.length + " result" + (filteredRows.length === 1 ? "" : "s");
+  count.textContent = filteredRows.length.toLocaleString() + " result" + (filteredRows.length === 1 ? "" : "s");
 
   if (filteredRows.length === 0) {
     container.classList.add("hidden");
     pag.classList.add("hidden");
     empty.classList.remove("hidden");
-    empty.innerHTML = "<p>No matching rows. Try a different search or clear filters.</p>";
+    empty.innerHTML = "<p>No matching rows. Try different filters or click Clear.</p>";
     return;
   }
   empty.classList.add("hidden");
@@ -329,9 +388,7 @@ function renderRows() {
   const slice = filteredRows.slice(start, start + PAGE_SIZE);
 
   container.innerHTML = "";
-  slice.forEach((row) => {
-    container.appendChild(buildRowCard(row));
-  });
+  slice.forEach((row) => container.appendChild(buildRowCard(row)));
 
   document.getElementById("page-info").textContent =
     "Page " + (currentPage + 1) + " of " + totalPages;
@@ -359,15 +416,21 @@ function buildRowCard(row) {
   mid.className = "row-card-mid";
   const desc = displayValue(row[CARD_FIELDS.secondary]);
   const hosp = displayValue(row[CARD_FIELDS.hospital]);
-  mid.innerHTML = (desc ? escapeHtml(desc) : "") +
-                  (hosp ? " · <span class='row-hospital'>" + escapeHtml(hosp) + "</span>" : "");
+  const loanset = displayValue(row["Loanset"]);
+  let midHtml = "";
+  if (desc) midHtml += escapeHtml(desc);
+  if (hosp) midHtml += (midHtml ? " · " : "") + "<span class='row-hospital'>" + escapeHtml(hosp) + "</span>";
+  if (loanset) midHtml += (midHtml ? " · " : "") + "Loanset " + escapeHtml(loanset);
+  mid.innerHTML = midHtml;
 
   const bot = document.createElement("div");
   bot.className = "row-card-bot";
   const statusVal = displayValue(row[CARD_FIELDS.status]);
-  const canShipVal = displayValue(row[CARD_FIELDS.canShip]);
+  const consign = displayValue(row["SAP Equipment Monitor Status (AUTO)"]);
+  const bek = displayValue(row["BEK Status (Auto)"]);
   if (statusVal) bot.appendChild(buildChip(statusVal, classifyStatus(statusVal)));
-  if (canShipVal) bot.appendChild(buildChip(canShipVal, classifyCanShip(canShipVal)));
+  if (consign) bot.appendChild(buildChip(shortConsign(consign), classifyConsign(consign)));
+  if (bek && bek !== "NOT IN BEK") bot.appendChild(buildChip("BEK: " + bek, classifyBek(bek)));
 
   card.appendChild(top);
   card.appendChild(mid);
@@ -386,19 +449,39 @@ function buildChip(text, kind) {
 
 function classifyStatus(v) {
   const s = String(v).toLowerCase();
-  if (s.includes("shipped") || s.includes("complete")) return "good";
-  if (s.includes("issue") || s.includes("fail") || s.includes("not")) return "bad";
-  if (s.includes("await") || s.includes("ordered") || s.includes("progress")) return "warn";
+  if (s === "#ref!") return "bad";
+  if (s.includes("shipped") || s.includes("built")) return "good";
+  if (s.includes("issue") || s.includes("fail")) return "bad";
+  if (s.includes("await") || s.includes("orthokit") || s.includes("topup")) return "warn";
+  if (s.includes("dissolved")) return "info";
   return "";
 }
-function classifyCanShip(v) {
+function classifyConsign(v) {
   const s = String(v).toLowerCase();
-  if (s === "yes" || s.includes("ready")) return "good";
-  if (s === "no" || s.includes("not")) return "bad";
-  return "warn";
+  if (s.includes("free for use")) return "good";
+  if (s.includes("blocked") || s.includes("unable")) return "bad";
+  if (s.includes("at customer") || s.includes("reserved")) return "info";
+  if (s.includes("dissolved") || s.includes("repair")) return "warn";
+  return "";
+}
+function shortConsign(v) {
+  // "loanset in consignment (E0010)" -> "In consignment"
+  const m = String(v).match(/loanset\s+(.+?)\s+\(/i);
+  if (m) return capitalize(m[1]);
+  if (String(v).includes("UNABLE")) return "Unable to find";
+  return v;
+}
+function classifyBek(v) {
+  const s = String(v).toLowerCase();
+  if (s === "complete" || s === "complete excess") return "good";
+  if (s === "incomplete") return "warn";
+  if (s === "do not ship") return "bad";
+  return "";
 }
 
-// --- Detail drawer --------------------------------------------------------
+// =========================================================================
+// DETAIL DRAWER
+// =========================================================================
 function openDrawer(row) {
   isCreating = false;
   editingRow = row;
@@ -417,13 +500,11 @@ function openDrawer(row) {
     t.textContent = group.title;
     g.appendChild(t);
     group.fields.forEach((f) => {
-      // Only show fields that exist in the sheet
       if (!(f.name in headerIndex)) return;
       g.appendChild(buildField(f, row[f.name]));
     });
     fieldsEl.appendChild(g);
   });
-
   document.getElementById("detail-drawer").classList.remove("hidden");
 }
 
@@ -486,11 +567,11 @@ function openCreateDrawer() {
   group.className = "field-group";
   const title = document.createElement("div");
   title.className = "field-group-title";
-  title.textContent = "New row — required fields marked with *";
+  title.textContent = "New row — required fields marked *";
   group.appendChild(title);
 
   NEW_ROW_FIELDS.forEach((f) => {
-    if (!(f.name in headerIndex)) return; // skip fields not in the sheet
+    if (!(f.name in headerIndex)) return;
     group.appendChild(buildCreateField(f));
   });
   fieldsEl.appendChild(group);
@@ -532,37 +613,29 @@ function buildCreateField(def) {
 }
 
 function onSaveClick() {
-  if (isCreating) {
-    createNewRow();
-  } else {
-    saveEdits();
-  }
+  if (isCreating) createNewRow();
+  else saveEdits();
 }
 
 async function saveEdits() {
   if (!editingRow) return;
   const changedKeys = Object.keys(editedValues);
-  if (changedKeys.length === 0) {
-    closeDrawer();
-    return;
-  }
+  if (changedKeys.length === 0) { closeDrawer(); return; }
   const btn = document.getElementById("save-edit");
   btn.disabled = true; btn.textContent = "Saving…";
 
   try {
     await Excel.run(async (ctx) => {
       const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
-      const sheetRow = editingRow._row; // 1-based
+      const sheetRow = editingRow._row;
       changedKeys.forEach((col) => {
         const colIdx = headerIndex[col];
         if (colIdx === undefined) return;
         const addr = colLetter(colIdx) + sheetRow;
-        const cell = sheet.getRange(addr);
-        cell.values = [[ editedValues[col] ]];
+        sheet.getRange(addr).values = [[ editedValues[col] ]];
       });
       await ctx.sync();
     });
-    // update local cache
     changedKeys.forEach((col) => { editingRow[col] = editedValues[col]; });
     showToast("Saved " + changedKeys.length + " change" + (changedKeys.length === 1 ? "" : "s"), "success");
     renderRows();
@@ -576,20 +649,17 @@ async function saveEdits() {
 }
 
 async function createNewRow() {
-  // Validate required fields
   const missing = [];
   const inputs = document.querySelectorAll("#detail-fields [data-field-name]");
   inputs.forEach((inp) => {
     inp.classList.remove("field-error");
     if (inp.dataset.required === "true") {
-      const v = inp.value.trim();
-      if (!v) {
+      if (!inp.value.trim()) {
         missing.push(inp.dataset.fieldName.trim());
         inp.classList.add("field-error");
       }
     }
   });
-
   const valMsg = document.getElementById("validation-msg");
   if (missing.length > 0) {
     valMsg.textContent = "Please fill in: " + missing.join(", ");
@@ -602,39 +672,28 @@ async function createNewRow() {
   btn.disabled = true; btn.textContent = "Creating…";
 
   try {
-    let newRowNumber = 0;
+    let newRowNumber = HEADER_ROW + 1;
+    for (const r of allRows) if (r._row >= newRowNumber) newRowNumber = r._row + 1;
+
     await Excel.run(async (ctx) => {
       const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
-      const used = sheet.getUsedRange(true);
-      used.load(["rowCount", "rowIndex"]);
-      await ctx.sync();
-
-      // Append after the last used row.
-      // Sheet row = used.rowIndex (0-based) + rowCount + 1 (to get 1-based next row)
-      newRowNumber = used.rowIndex + used.rowCount + 1;
-
-      // Build a single full-width row of values (empty string for unset cells)
       const rowValues = new Array(allHeaders.length).fill("");
       Object.keys(editedValues).forEach((col) => {
         const idx = headerIndex[col];
         if (idx !== undefined) rowValues[idx] = editedValues[col];
       });
-
       const lastColLetter = colLetter(allHeaders.length - 1);
       const addr = "A" + newRowNumber + ":" + lastColLetter + newRowNumber;
       sheet.getRange(addr).values = [rowValues];
-
-      // Scroll the user to the new row so they can see it landed
       sheet.getRange("A" + newRowNumber).select();
       await ctx.sync();
     });
 
-    // Update local cache so the new row shows up immediately in the list
     const newRowObj = { _row: newRowNumber };
     allHeaders.forEach((h) => { newRowObj[h] = editedValues[h] || ""; });
     allRows.push(newRowObj);
 
-    showToast("New row created in sheet (row " + newRowNumber + ")", "success");
+    showToast("New row created (row " + newRowNumber + ")", "success");
     populateFilterDropdowns();
     applyFilters();
     closeDrawer();
@@ -646,9 +705,266 @@ async function createNewRow() {
   }
 }
 
-// --- Helpers --------------------------------------------------------------
+// =========================================================================
+// DASHBOARD
+// =========================================================================
+function renderDashboard() {
+  const root = document.getElementById("dashboard-content");
+  if (allRows.length === 0) {
+    root.innerHTML = "<p class='empty-state'>Load data first.</p>";
+    return;
+  }
+
+  // Only count "active" rows (not shipped/dissolved/#REF!)
+  const active = allRows.filter((r) => !HIDDEN_STATUSES.includes(String(r["Status"] || "")));
+
+  const consignCounts = countBy(active, "SAP Equipment Monitor Status (AUTO)");
+  const bekCounts = countBy(active, "BEK Status (Auto)", (v) => v && v !== "NOT IN BEK");
+  const folCounts = countBy(active, "FOL Status (Auto)", (v) => v && v !== "#REF!" && v !== "Please enter FOL ID");
+  const objTypeCounts = countBy(active, "SAP Object Type (Auto)", (v) => v && v !== "UNABLE TO FIND EQUIPMENT");
+  const hospitalCounts = countBy(active, "Hospital", (v) => v && !["Enter Ship To","ORTHOKIT","FORECAST ORDER","Not in Hospital Master",""].includes(v));
+
+  // Summary headline tiles
+  const issueCount = active.filter(rowIsIssue).length;
+  const blockedCount = active.filter((r) => /blocked/i.test(String(r["SAP Equipment Monitor Status (AUTO)"] || ""))).length;
+  const incompleteCount = active.filter((r) => String(r["BEK Status (Auto)"]) === "Incomplete").length;
+  const doNotShipCount = active.filter((r) => String(r["BEK Status (Auto)"]) === "Do not ship").length;
+
+  let html = "";
+
+  html += dashSection("Overview", `
+    <div class="dash-grid">
+      ${tile("Active modules", active.length.toLocaleString(), "all non-shipped rows", "info")}
+      ${tile("With issues", issueCount.toLocaleString(), "incomplete / blocked / KB issue", issueCount > 0 ? "bad" : "good", () => applyDashboardFilter({ onlyIssues: true }))}
+      ${tile("Loanset blocked", blockedCount.toLocaleString(), "E0001 in SAP", blockedCount > 0 ? "warn" : "good", () => applyDashboardFilter({ consign: "loanset blocked (E0001)" }))}
+      ${tile("BEK incomplete", incompleteCount.toLocaleString(), "needs completion", incompleteCount > 0 ? "warn" : "good", () => applyDashboardFilter({ bek: "Incomplete" }))}
+    </div>
+  `);
+
+  html += dashSection("Consignment status", listTile(consignCounts, 8, (label) => applyDashboardFilter({ consign: label })));
+  html += dashSection("Object type", listTile(objTypeCounts, 8, (label) => applyDashboardFilter({ objectType: label })));
+  html += dashSection("BEK status", listTile(bekCounts, 6, (label) => applyDashboardFilter({ bek: label })));
+  html += dashSection("FOL status", listTile(folCounts, 6, (label) => applyDashboardFilter({ fol: label })));
+  html += dashSection("Top hospitals (active modules)", listTile(hospitalCounts, 10, (label) => applyDashboardFilter({ search: label })));
+
+  root.innerHTML = html;
+
+  // Wire up clickable list rows
+  root.querySelectorAll("[data-dash-action]").forEach((el) => {
+    el.addEventListener("click", () => {
+      const action = el.dataset.dashAction;
+      const value = el.dataset.dashValue;
+      dispatchDashboardAction(action, value);
+    });
+  });
+}
+
+function dashSection(title, contentHtml) {
+  return `
+    <div class="dash-section">
+      <div class="dash-section-title">${escapeHtml(title)}</div>
+      ${contentHtml}
+    </div>
+  `;
+}
+
+function tile(label, value, sub, kind, onClick) {
+  const cls = kind ? " " + kind : "";
+  // We store the click action via a data attr — wired up after render.
+  // Tile click actions are inlined as plain handlers here.
+  return `
+    <div class="dash-tile${cls}">
+      <div class="dash-tile-label">${escapeHtml(label)}</div>
+      <div class="dash-tile-value">${escapeHtml(value)}</div>
+      <div class="dash-tile-sub">${escapeHtml(sub)}</div>
+    </div>
+  `;
+}
+
+function listTile(counts, max, onClickFactory) {
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, max);
+  if (entries.length === 0) return "<div class='dash-list-tile'><div class='dash-list-row'>No data</div></div>";
+  const rows = entries.map(([label, n]) => `
+    <div class="dash-list-row" data-dash-action="generic" data-dash-value="${escapeAttr(label)}">
+      <span class="dash-list-name" title="${escapeAttr(label)}">${escapeHtml(label)}</span>
+      <span class="dash-list-count">${n.toLocaleString()}</span>
+    </div>
+  `).join("");
+  return `<div class="dash-list-tile">${rows}</div>`;
+}
+
+// Apply a dashboard tile click — switches to Browse and sets the relevant filter
+function applyDashboardFilter(opts) {
+  switchView("browse");
+  document.getElementById("search").value = opts.search || "";
+  document.getElementById("hide-shipped").checked = true;
+  document.getElementById("only-issues").checked = !!opts.onlyIssues;
+  document.getElementById("filter-consign").value = opts.consign || "";
+  document.getElementById("filter-object-type").value = opts.objectType || "";
+  document.getElementById("filter-bek").value = opts.bek || "";
+  document.getElementById("filter-fol").value = opts.fol || "";
+  applyFilters();
+}
+
+function dispatchDashboardAction(action, value) {
+  // Heuristic: figure out which filter this list belongs to from the title above it
+  // Simpler: try setting each dropdown, see which one has a matching option
+  const candidates = ["filter-consign", "filter-object-type", "filter-bek", "filter-fol", "filter-bu"];
+  for (const id of candidates) {
+    const sel = document.getElementById(id);
+    for (const opt of sel.options) {
+      if (opt.value === value) {
+        switchView("browse");
+        clearFilters();
+        sel.value = value;
+        applyFilters();
+        return;
+      }
+    }
+  }
+  // Fallback: use it as a search term (e.g. hospital names)
+  switchView("browse");
+  clearFilters();
+  document.getElementById("search").value = value;
+  applyFilters();
+}
+
+function countBy(rows, col, filterFn) {
+  const counts = {};
+  for (const r of rows) {
+    const v = r[col];
+    if (v === undefined || v === null) continue;
+    const s = String(v);
+    if (s === "") continue;
+    if (filterFn && !filterFn(s)) continue;
+    counts[s] = (counts[s] || 0) + 1;
+  }
+  return counts;
+}
+
+// =========================================================================
+// WEEK VIEW
+// =========================================================================
+function renderWeekView() {
+  const root = document.getElementById("week-columns");
+  if (allRows.length === 0) {
+    root.innerHTML = "<p class='empty-state'>Load data first.</p>";
+    return;
+  }
+
+  const today = new Date();
+  const currentWeek = isoWeek(today);
+  const currentYear = today.getFullYear();
+  document.getElementById("week-current-label").textContent = "Current week: " + currentWeek;
+  document.getElementById("week-config-info").textContent = "(ISO week " + currentWeek + " of " + currentYear + ")";
+
+  // Filter to active rows that have a Final Shipment Week
+  const active = allRows.filter((r) => !HIDDEN_STATUSES.includes(String(r["Status"] || "")));
+  const buckets = {
+    overdue: [],
+    thisweek: [],
+    nextweek: [],
+    later: [],
+    noweek: [],
+  };
+
+  for (const r of active) {
+    const raw = r["Final Shipment Week"];
+    const wk = parseWeek(raw);
+    if (wk === null) { buckets.noweek.push(r); continue; }
+    if (wk < currentWeek) buckets.overdue.push(r);
+    else if (wk === currentWeek) buckets.thisweek.push(r);
+    else if (wk === currentWeek + 1) buckets.nextweek.push(r);
+    else if (wk <= currentWeek + WEEK_LOOK_AHEAD) buckets.later.push(r);
+    else buckets.later.push(r);
+  }
+
+  // Sort each bucket — overdue: by week ascending (oldest first); others: by week
+  buckets.overdue.sort((a, b) => parseWeek(a["Final Shipment Week"]) - parseWeek(b["Final Shipment Week"]));
+  buckets.later.sort((a, b) => parseWeek(a["Final Shipment Week"]) - parseWeek(b["Final Shipment Week"]));
+
+  let html = "";
+  html += buildWeekColumn("Overdue", "overdue", buckets.overdue, "Final Shipment Week before week " + currentWeek);
+  html += buildWeekColumn("This week (W" + currentWeek + ")", "thisweek", buckets.thisweek, "Final Shipment Week = " + currentWeek);
+  html += buildWeekColumn("Next week (W" + (currentWeek + 1) + ")", "nextweek", buckets.nextweek, "Final Shipment Week = " + (currentWeek + 1));
+  html += buildWeekColumn("Later (within " + WEEK_LOOK_AHEAD + " weeks)", "", buckets.later, "");
+  html += buildWeekColumn("No shipment week set", "", buckets.noweek, "");
+
+  root.innerHTML = html;
+
+  // Wire clicks on week cards
+  root.querySelectorAll(".week-card").forEach((c) => {
+    c.addEventListener("click", () => {
+      const sheetRow = parseInt(c.dataset.row, 10);
+      const row = allRows.find((r) => r._row === sheetRow);
+      if (row) openDrawer(row);
+    });
+  });
+}
+
+function buildWeekColumn(label, kindClass, rows, subLabel) {
+  if (rows.length === 0) {
+    return `
+      <div class="week-col">
+        <div class="week-col-header ${kindClass}">
+          <strong>${escapeHtml(label)}</strong>
+          <span class="week-col-count">0</span>
+        </div>
+        <div class="week-col-body"><div class="empty-state" style="padding:16px;">Nothing here.</div></div>
+      </div>
+    `;
+  }
+  const cards = rows.slice(0, 100).map((r) => {
+    const mod = displayValue(r["JDE Module"]) || "(no module)";
+    const hosp = displayValue(r["Hospital"]) || "—";
+    const bu = displayValue(r["Business Unit"]) || "";
+    return `
+      <div class="week-card" data-row="${r._row}">
+        <div class="week-card-top">${escapeHtml(mod)} <span style="font-weight:400;color:var(--text-muted);">· ${escapeHtml(bu)}</span></div>
+        <div class="week-card-bot">${escapeHtml(hosp)}</div>
+      </div>
+    `;
+  }).join("");
+  const overflow = rows.length > 100 ? `<div style="text-align:center;padding:6px;font-size:11px;color:var(--text-muted);">+ ${rows.length - 100} more</div>` : "";
+  return `
+    <div class="week-col">
+      <div class="week-col-header ${kindClass}">
+        <strong>${escapeHtml(label)}</strong>
+        <span class="week-col-count">${rows.length}</span>
+      </div>
+      <div class="week-col-body">${cards}${overflow}</div>
+    </div>
+  `;
+}
+
+// Parse "Final Shipment Week" values: "12", "15_2026", " 7 ", "2024", etc.
+function parseWeek(raw) {
+  if (raw === null || raw === undefined || raw === "") return null;
+  const s = String(raw).trim();
+  // Pattern "15_2026" — take the week part
+  const m = s.match(/^(\d+)(?:_(\d{4}))?$/);
+  if (m) {
+    const wk = parseInt(m[1], 10);
+    if (wk >= 1 && wk <= 53) return wk;
+    // four-digit value means it's a year — ignore
+    return null;
+  }
+  return null;
+}
+
+// ISO-8601 week number for a date
+function isoWeek(d) {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  return Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+}
+
+// =========================================================================
+// HELPERS
+// =========================================================================
 function colLetter(idx) {
-  // 0 -> A, 25 -> Z, 26 -> AA, etc.
   let s = ""; let n = idx;
   while (n >= 0) {
     s = String.fromCharCode((n % 26) + 65) + s;
@@ -668,6 +984,8 @@ function escapeHtml(s) {
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
 }
+function escapeAttr(s) { return escapeHtml(s); }
+function capitalize(s) { return String(s).charAt(0).toUpperCase() + String(s).slice(1); }
 function debounce(fn, ms) {
   let t; return function () {
     clearTimeout(t);
@@ -676,8 +994,9 @@ function debounce(fn, ms) {
   };
 }
 function showEmpty(msg) {
-  document.getElementById("empty-state").classList.remove("hidden");
-  document.getElementById("empty-state").innerHTML = "<p>" + escapeHtml(msg) + "</p>";
+  const e = document.getElementById("empty-state");
+  e.classList.remove("hidden");
+  e.innerHTML = "<p>" + escapeHtml(msg) + "</p>";
   document.getElementById("rows-container").classList.add("hidden");
   document.getElementById("pagination").classList.add("hidden");
 }
@@ -685,5 +1004,5 @@ function showToast(msg, kind) {
   const t = document.getElementById("toast");
   t.textContent = msg;
   t.className = "toast " + (kind || "");
-  setTimeout(() => { t.className = "toast hidden"; }, 2400);
+  setTimeout(() => { t.className = "toast hidden"; }, 2600);
 }
