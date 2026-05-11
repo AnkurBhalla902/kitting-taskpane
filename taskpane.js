@@ -39,11 +39,11 @@ const SEARCH_FIELDS = [
 
 // Top-of-page filter dropdowns
 const FILTER_DROPDOWNS = [
-  { id: "filter-bu",          column: "Business Unit", limit: 30 },
-  { id: "filter-consign",     column: "SAP Equipment Monitor Status (AUTO)", limit: 15 },
-  { id: "filter-object-type", column: "SAP Object Type (Auto)", limit: 15 },
-  { id: "filter-bek",         column: "BEK Status (Auto)", limit: 15 },
-  { id: "filter-fol",         column: "FOL Status (Auto)", limit: 15 },
+  { id: "filter-bu",       column: "Business Unit", limit: 30 },
+  { id: "filter-week-in",  column: "Week To Raise Inbound", limit: 60, sort: "weekish" },
+  { id: "filter-forecast", column: "ForecastMonth", limit: 60, sort: "monthYear" },
+  { id: "filter-bek",      column: "BEK Status (Auto)", limit: 15 },
+  { id: "filter-fol",      column: "FOL Status (Auto)", limit: 15 },
 ];
 
 // Values considered "hidden by default" — anything matching these in Status
@@ -311,12 +311,49 @@ function populateFilterDropdowns() {
       if (s === "#REF!") continue;
       if (!seen.has(s)) seen.add(s);
     }
-    [...seen].sort().slice(0, f.limit).forEach((v) => {
+    const sortFn = pickSorter(f.sort);
+    [...seen].sort(sortFn).slice(0, f.limit).forEach((v) => {
       const opt = document.createElement("option");
       opt.value = v; opt.textContent = v;
       el.appendChild(opt);
     });
   });
+}
+
+function pickSorter(kind) {
+  if (kind === "weekish") {
+    // Sort by parseable week number (1-53) first, then year values, then text
+    return (a, b) => {
+      const wa = parseWeek(a), wb = parseWeek(b);
+      if (wa !== null && wb !== null) return wa - wb;
+      if (wa !== null) return -1;
+      if (wb !== null) return 1;
+      return String(a).localeCompare(String(b));
+    };
+  }
+  if (kind === "monthYear") {
+    // "Jan-25" / "Feb-26" — sort chronologically
+    return (a, b) => {
+      const da = parseMonthYear(a), db = parseMonthYear(b);
+      if (da && db) return da - db;
+      if (da) return -1;
+      if (db) return 1;
+      return String(a).localeCompare(String(b));
+    };
+  }
+  return (a, b) => String(a).localeCompare(String(b));
+}
+
+function parseMonthYear(s) {
+  // "Jan-25" -> Date(2025, 0, 1)
+  const m = String(s).trim().match(/^([A-Za-z]{3})-(\d{2,4})$/);
+  if (!m) return null;
+  const months = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+  const mo = months[m[1].toLowerCase()];
+  if (mo === undefined) return null;
+  let year = parseInt(m[2], 10);
+  if (year < 100) year += 2000;
+  return new Date(year, mo, 1).getTime();
 }
 
 function clearFilters() {
@@ -718,15 +755,12 @@ function renderDashboard() {
   // Only count "active" rows (not shipped/dissolved/#REF!)
   const active = allRows.filter((r) => !HIDDEN_STATUSES.includes(String(r["Status"] || "")));
 
-  const consignCounts = countBy(active, "SAP Equipment Monitor Status (AUTO)");
   const bekCounts = countBy(active, "BEK Status (Auto)", (v) => v && v !== "NOT IN BEK");
   const folCounts = countBy(active, "FOL Status (Auto)", (v) => v && v !== "#REF!" && v !== "Please enter FOL ID");
-  const objTypeCounts = countBy(active, "SAP Object Type (Auto)", (v) => v && v !== "UNABLE TO FIND EQUIPMENT");
   const hospitalCounts = countBy(active, "Hospital", (v) => v && !["Enter Ship To","ORTHOKIT","FORECAST ORDER","Not in Hospital Master",""].includes(v));
 
   // Summary headline tiles
   const issueCount = active.filter(rowIsIssue).length;
-  const blockedCount = active.filter((r) => /blocked/i.test(String(r["SAP Equipment Monitor Status (AUTO)"] || ""))).length;
   const incompleteCount = active.filter((r) => String(r["BEK Status (Auto)"]) === "Incomplete").length;
   const doNotShipCount = active.filter((r) => String(r["BEK Status (Auto)"]) === "Do not ship").length;
 
@@ -736,13 +770,16 @@ function renderDashboard() {
     <div class="dash-grid">
       ${tile("Active modules", active.length.toLocaleString(), "all non-shipped rows", "info")}
       ${tile("With issues", issueCount.toLocaleString(), "incomplete / blocked / KB issue", issueCount > 0 ? "bad" : "good", () => applyDashboardFilter({ onlyIssues: true }))}
-      ${tile("Loanset blocked", blockedCount.toLocaleString(), "E0001 in SAP", blockedCount > 0 ? "warn" : "good", () => applyDashboardFilter({ consign: "loanset blocked (E0001)" }))}
       ${tile("BEK incomplete", incompleteCount.toLocaleString(), "needs completion", incompleteCount > 0 ? "warn" : "good", () => applyDashboardFilter({ bek: "Incomplete" }))}
+      ${tile("Do not ship", doNotShipCount.toLocaleString(), "BEK flagged", doNotShipCount > 0 ? "bad" : "good", () => applyDashboardFilter({ bek: "Do not ship" }))}
     </div>
   `);
 
-  html += dashSection("Consignment status", listTile(consignCounts, 8, (label) => applyDashboardFilter({ consign: label })));
-  html += dashSection("Object type", listTile(objTypeCounts, 8, (label) => applyDashboardFilter({ objectType: label })));
+  const weekInCounts = countBy(active, "Week To Raise Inbound", (v) => v && v !== "#REF!");
+  const forecastCounts = countBy(active, "ForecastMonth", (v) => v && v !== "#REF!");
+
+  html += dashSection("Upcoming inbound weeks", listTile(sortCountsForWeek(weekInCounts), 10, () => {}));
+  html += dashSection("Upcoming forecast months", listTile(sortCountsByMonthYear(forecastCounts), 10, () => {}));
   html += dashSection("BEK status", listTile(bekCounts, 6, (label) => applyDashboardFilter({ bek: label })));
   html += dashSection("FOL status", listTile(folCounts, 6, (label) => applyDashboardFilter({ fol: label })));
   html += dashSection("Top hospitals (active modules)", listTile(hospitalCounts, 10, (label) => applyDashboardFilter({ search: label })));
@@ -782,7 +819,14 @@ function tile(label, value, sub, kind, onClick) {
 }
 
 function listTile(counts, max, onClickFactory) {
-  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, max);
+  // counts can be either a plain {label: count} object OR an array of [label, count] tuples
+  // that has already been sorted as desired.
+  let entries;
+  if (Array.isArray(counts)) {
+    entries = counts.slice(0, max);
+  } else {
+    entries = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, max);
+  }
   if (entries.length === 0) return "<div class='dash-list-tile'><div class='dash-list-row'>No data</div></div>";
   const rows = entries.map(([label, n]) => `
     <div class="dash-list-row" data-dash-action="generic" data-dash-value="${escapeAttr(label)}">
@@ -793,23 +837,43 @@ function listTile(counts, max, onClickFactory) {
   return `<div class="dash-list-tile">${rows}</div>`;
 }
 
+// Sort week-style values chronologically (1, 2, ..., 53, then year-strings, then text)
+function sortCountsForWeek(counts) {
+  return Object.entries(counts).sort((a, b) => {
+    const wa = parseWeek(a[0]), wb = parseWeek(b[0]);
+    if (wa !== null && wb !== null) return wa - wb;
+    if (wa !== null) return -1;
+    if (wb !== null) return 1;
+    return String(a[0]).localeCompare(String(b[0]));
+  });
+}
+
+// Sort month-year strings (Jan-25, Feb-25, ...) chronologically
+function sortCountsByMonthYear(counts) {
+  return Object.entries(counts).sort((a, b) => {
+    const da = parseMonthYear(a[0]), db = parseMonthYear(b[0]);
+    if (da && db) return da - db;
+    if (da) return -1;
+    if (db) return 1;
+    return String(a[0]).localeCompare(String(b[0]));
+  });
+}
+
 // Apply a dashboard tile click — switches to Browse and sets the relevant filter
 function applyDashboardFilter(opts) {
   switchView("browse");
   document.getElementById("search").value = opts.search || "";
   document.getElementById("hide-shipped").checked = true;
   document.getElementById("only-issues").checked = !!opts.onlyIssues;
-  document.getElementById("filter-consign").value = opts.consign || "";
-  document.getElementById("filter-object-type").value = opts.objectType || "";
   document.getElementById("filter-bek").value = opts.bek || "";
   document.getElementById("filter-fol").value = opts.fol || "";
+  document.getElementById("filter-week-in").value = opts.weekIn || "";
+  document.getElementById("filter-forecast").value = opts.forecast || "";
   applyFilters();
 }
 
 function dispatchDashboardAction(action, value) {
-  // Heuristic: figure out which filter this list belongs to from the title above it
-  // Simpler: try setting each dropdown, see which one has a matching option
-  const candidates = ["filter-consign", "filter-object-type", "filter-bek", "filter-fol", "filter-bu"];
+  const candidates = ["filter-bek", "filter-fol", "filter-week-in", "filter-forecast", "filter-bu"];
   for (const id of candidates) {
     const sel = document.getElementById(id);
     for (const opt of sel.options) {
@@ -822,7 +886,7 @@ function dispatchDashboardAction(action, value) {
       }
     }
   }
-  // Fallback: use it as a search term (e.g. hospital names)
+  // Fallback: treat as a search term
   switchView("browse");
   clearFilters();
   document.getElementById("search").value = value;
