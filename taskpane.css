@@ -153,18 +153,18 @@ html,body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--
 .dash-list-name { color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:75%; }
 .dash-list-count { color:var(--muted); font-weight:600; font-variant-numeric:tabular-nums; }
 
-/* ── WEEK VIEW — collapsible columns, no fixed height ── */
+/* ── WEEK VIEW — collapsible columns with proper scrolling ── */
 .week-mini-header { padding:6px 10px; background:var(--surface); border-bottom:1px solid var(--border);
   display:flex; align-items:center; gap:8px; flex-shrink:0; }
 .week-mini-header strong { font-size:12px; }
 .muted { color:var(--muted); font-size:11px; }
-.week-columns { flex:1; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:6px; }
-.week-col { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); overflow:hidden;
-  display:flex; flex-direction:column; min-height:0; }
-.week-col-header { padding:7px 10px; background:var(--surface-2); border-bottom:1px solid var(--border);
+.week-columns { flex:1; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:8px; }
+.week-col { background:var(--surface); border:1px solid var(--border); border-radius:var(--r); }
+.week-col-header { padding:8px 10px; background:var(--surface-2);
   display:flex; align-items:center; gap:8px; cursor:pointer; user-select:none;
-  position:sticky; top:0; z-index:2; }
-.week-col.collapsed .week-col-header { border-bottom:none; }
+  border-radius:var(--r) var(--r) 0 0; }
+.week-col.collapsed .week-col-header { border-radius:var(--r); }
+.week-col:not(.collapsed) .week-col-header { border-bottom:1px solid var(--border); }
 .week-col-arrow {
   display:inline-block; width:7px; height:7px;
   border-right:2px solid var(--muted); border-bottom:2px solid var(--muted);
@@ -177,11 +177,14 @@ html,body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--
 .week-col-header.nextweek strong { color:var(--warn); }
 .week-col-count { font-size:10.5px; color:var(--muted); background:var(--surface);
   padding:2px 7px; border-radius:10px; font-variant-numeric:tabular-nums; }
-.week-col-body { padding:5px; display:flex; flex-direction:column; gap:3px;
-  max-height:55vh; overflow-y:auto; }
+/* The body has a HARD max-height and its own scrollbar.
+   This is the key change — fixed pixel height ensures scrolling actually works. */
+.week-col-body { padding:6px; display:flex; flex-direction:column; gap:4px;
+  max-height:340px; overflow-y:auto; overflow-x:hidden;
+  border-radius:0 0 var(--r) var(--r); }
 .week-col.collapsed .week-col-body { display:none; }
 .week-card { background:var(--bg); border:1px solid var(--border); border-radius:var(--rs);
-  padding:6px 9px; font-size:11.5px; cursor:pointer; }
+  padding:6px 9px; font-size:11.5px; cursor:pointer; flex-shrink:0; }
 .week-card:hover { border-color:var(--border-strong); }
 .week-card-top { font-weight:600; display:flex; justify-content:space-between; gap:6px; }
 .week-card-bot { color:var(--muted); font-size:10.5px; margin-top:1px; }
