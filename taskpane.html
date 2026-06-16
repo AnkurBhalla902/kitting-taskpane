@@ -72,9 +72,11 @@
         </div>
         <div class="filter-grid">
           <select id="filter-bu" class="filter"><option value="">All BUs</option></select>
+          <select id="filter-status" class="filter"><option value="">Any status</option></select>
           <select id="filter-week-in" class="filter"><option value="">Any inbound week</option></select>
-          <select id="filter-forecast" class="filter"><option value="">Any forecast month</option></select>
-          <select id="filter-fol" class="filter"><option value="">Any FOL status</option></select>
+          <div class="sap-search-wrap">
+            <input id="filter-sap" type="search" class="filter sap-input" placeholder="SAP module…" autocomplete="off" />
+          </div>
         </div>
         <div class="filter-clear-row">
           <button id="clear-filters" class="btn-link">Clear all filters</button>
