@@ -76,6 +76,8 @@ html,body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--
   border:1px solid var(--border-strong); border-radius:var(--rs);
   background:var(--surface); color:var(--text); outline:none; min-width:0; height:26px; }
 .filter:focus { border-color:var(--accent); }
+.sap-search-wrap { grid-column:1/-1; }
+.sap-input { width:100%; }
 .filter-clear-row { display:flex; justify-content:flex-end; }
 .btn-link { background:none; border:none; color:var(--accent); font:500 11px/1 inherit;
   cursor:pointer; padding:2px 0; }
@@ -243,3 +245,4 @@ html,body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--
 ::-webkit-scrollbar { width:6px; }
 ::-webkit-scrollbar-track { background:transparent; }
 ::-webkit-scrollbar-thumb { background:var(--border-strong); border-radius:3px; }
+
