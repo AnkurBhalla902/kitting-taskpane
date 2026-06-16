@@ -1,17 +1,14 @@
 /* ─────────────────────────────────────── */
 /*  Kitting Flow v4                        */
 /* ─────────────────────────────────────── */
-
 const SHEET_NAME = "All Data";
 const DATA_FIRST_COL = "A", DATA_LAST_COL = "AX";
 const HEADER_ROW = 1, MAX_DATA_ROW = 20000, CHUNK_ROWS = 500;
 const PAGE_SIZE = 50;
-
 const CARD_FIELDS = {
   primary:"JDE Module", secondary:"JDE Description",
   group:"Business Unit", hospital:"Hospital", status:"Status",
 };
-
 const SEARCH_FIELDS = [
   "JDE Module","JDE Description","JDE Build number","Module_Build",
   "SAP Module","SAP Serial Number","SAP Description",
@@ -22,12 +19,10 @@ const SEARCH_FIELDS = [
   "Ordering Comment ","S&OP COMMENTS","Kit build comments",
   "BEK Ordering Issue (comments)",
 ];
-
 const UNALLOC_HOSPITALS = new Set([
   "Enter Ship To","ORTHOKIT","FORECAST ORDER","Not in Hospital Master",
 ]);
 const HIDDEN_STATUSES = ["EQUIPMENT SHIPPED","EQUIPMENT DISSOLVED","#REF!"];
-
 function rowIsIssue(row) {
   const bek=String(row["BEK Status (Auto)"]||""), ship=String(row["Can Module Ship?"]||"");
   const loc=String(row["ISSUE LOCATION (Auto)"]||""), stat=String(row["Status"]||"");
@@ -41,14 +36,11 @@ function rowIsAllocated(row) {
   const h = String(row["Hospital"]||"").trim();
   return h!==""&&!UNALLOC_HOSPITALS.has(h);
 }
-
 const FILTER_DROPDOWNS = [
-  { id:"filter-bu",       column:"Business Unit",         limit:30 },
-  { id:"filter-week-in",  column:"Week To Raise Inbound", limit:60, sort:"weekish" },
-  { id:"filter-forecast", column:"ForecastMonth",         limit:60, sort:"monthYear" },
-  { id:"filter-fol",      column:"FOL Status (Auto)",     limit:15 },
+  { id:"filter-bu",      column:"Business Unit",         limit:30 },
+  { id:"filter-status",  column:"Status",                limit:15 },
+  { id:"filter-week-in", column:"Week To Raise Inbound", limit:60, sort:"weekish" },
 ];
-
 const DETAIL_GROUPS = [
   { title:"Identification", fields:[
     {name:"JDE Module"},{name:"JDE Description"},{name:"JDE Build number"},
@@ -80,7 +72,6 @@ const DETAIL_GROUPS = [
     {name:"Kit build comments",editable:true,multiline:true},
   ]},
 ];
-
 const NEW_ROW_FIELDS = [
   {name:"JDE Module",required:true},{name:"JDE Description",required:true},
   {name:"Business Unit",required:true},{name:"Hospital",required:true},
@@ -90,22 +81,18 @@ const NEW_ROW_FIELDS = [
   {name:"9SE1 order number"},{name:"PO"},
   {name:"Ordering Comment ",multiline:true},{name:"S&OP COMMENTS",multiline:true},
 ];
-
 // ── STATE ──
 let allHeaders=[], headerIndex={}, allRows=[], filteredRows=[];
 let currentPage=0, editingRow=null, editedValues={}, isCreating=false;
 let currentView="browse";
-let activeFilters={ alloc:"", reason:"", hideShipped:true, onlyIssues:false };
-
+let activeFilters={ alloc:"", reason:"", hideShipped:true, onlyIssues:false, sapModule:"" };
 // Track which dashboard sections / week columns are collapsed (persists during session)
 const collapseState = { dash:{}, week:{} };
-
 // ── BOOTSTRAP ──
 Office.onReady((info)=>{
   if(info.host!==Office.HostType.Excel) return showToast("Run in Excel.","error");
   bindUi(); loadData();
 });
-
 function bindUi() {
   document.getElementById("refresh-btn").addEventListener("click", loadData);
   document.getElementById("new-row-btn").addEventListener("click", openCreateDrawer);
@@ -124,14 +111,18 @@ function bindUi() {
     applyFilters();
   });
   FILTER_DROPDOWNS.forEach(f => document.getElementById(f.id).addEventListener("change", applyFilters));
+  document.getElementById("filter-sap").addEventListener("input", debounce(() => {
+    activeFilters.sapModule = document.getElementById("filter-sap").value.trim();
+    updateFilterBadge();
+    applyFilters();
+  }, 250));
   document.getElementById("clear-filters").addEventListener("click", clearFilters);
   document.getElementById("prev-page").addEventListener("click", () => { currentPage--; renderRows(); });
   document.getElementById("next-page").addEventListener("click", () => { currentPage++; renderRows(); });
   document.getElementById("close-drawer").addEventListener("click", closeDrawer);
   document.getElementById("cancel-edit").addEventListener("click", closeDrawer);
-  document.getElementById("save-edit").addEventListener("click", onSaveClick);
 }
-
+  document.getElementById("save-edit").addEventListener("click", onSaveClick);
 // ── FILTER PANEL ──
 let filterPanelOpen=false;
 function toggleFilterPanel() {
@@ -161,23 +152,23 @@ function updateFilterBadge() {
   if (activeFilters.reason) count++;
   if (!activeFilters.hideShipped) count++;
   if (activeFilters.onlyIssues) count++;
-  FILTER_DROPDOWNS.forEach(f => { if (document.getElementById(f.id).value) count++; });
-  const badge = document.getElementById("filter-badge");
+  if (activeFilters.sapModule) count++;
+  FILTER_DROPDOWNS.forEach(f => { if (document.getElementById(f.id).value) count++; });  const badge = document.getElementById("filter-badge");
   badge.textContent = count;
   badge.classList.toggle("hidden", count===0);
 }
 function clearFilters() {
   document.getElementById("search").value = "";
-  activeFilters = { alloc:"", reason:"", hideShipped:true, onlyIssues:false };
+  document.getElementById("filter-sap").value = "";
+  activeFilters = { alloc:"", reason:"", hideShipped:true, onlyIssues:false, sapModule:"" };
   document.querySelectorAll(".pill[data-slicer]").forEach(p => p.classList.toggle("active", p.dataset.val===""));
   document.getElementById("toggle-hide-shipped").classList.add("active");
   document.getElementById("toggle-only-issues").classList.remove("active");
   document.getElementById("reason-row").style.display = "none";
   FILTER_DROPDOWNS.forEach(f => { document.getElementById(f.id).value = ""; });
+}
   updateFilterBadge();
   applyFilters();
-}
-
 // ── FILTERS ──
 function applyFilters() {
   const q = document.getElementById("search").value.trim().toLowerCase();
@@ -192,6 +183,10 @@ function applyFilters() {
     if (activeFilters.alloc==="allocated"     && !rowIsAllocated(row)) return false;
     if (activeFilters.alloc==="not-allocated" &&  rowIsAllocated(row)) return false;
     if (activeFilters.reason && String(row["Hospital"]||"").trim()!==activeFilters.reason) return false;
+    if (activeFilters.sapModule) {
+      const rowSap = String(row["SAP Module"]||"").toLowerCase();
+      if (!rowSap.includes(activeFilters.sapModule.toLowerCase())) return false;
+    }
     for (const col of Object.keys(dropVals)) {
       if (String(row[col]??"") !== dropVals[col]) return false;
     }
@@ -205,7 +200,6 @@ function applyFilters() {
   updateFilterBadge();
   renderRows();
 }
-
 function populateFilterDropdowns() {
   FILTER_DROPDOWNS.forEach(f => {
     const el = document.getElementById(f.id);
@@ -237,7 +231,6 @@ function pickSorter(kind) {
   };
   return (a,b) => a.localeCompare(b);
 }
-
 // ── RENDER ROWS ──
 function renderRows() {
   const container=document.getElementById("rows-container");
@@ -260,7 +253,6 @@ function renderRows() {
   document.getElementById("prev-page").disabled = currentPage===0;
   document.getElementById("next-page").disabled = currentPage>=total-1;
 }
-
 function buildRowCard(row) {
   const card=document.createElement("div"); card.className="row-card"; card.tabIndex=0;
   const top=document.createElement("div"); top.className="row-card-top";
@@ -269,7 +261,6 @@ function buildRowCard(row) {
   const bu=document.createElement("div"); bu.className="row-bu";
   bu.textContent=displayValue(row[CARD_FIELDS.group]);
   top.append(mod,bu);
-
   const mid=document.createElement("div"); mid.className="row-card-mid";
   const hosp=displayValue(row["Hospital"]), loanset=displayValue(row["Loanset"]);
   const desc=displayValue(row[CARD_FIELDS.secondary]);
@@ -281,12 +272,10 @@ function buildRowCard(row) {
     ? `<span class='row-alloc-badge alloc-yes'>Allocated</span>`
     : `<span class='row-alloc-badge alloc-no'>${escapeHtml(getAllocReason(row))}</span>`);
   mid.innerHTML = html;
-
   const bot=document.createElement("div"); bot.className="row-card-bot";
   const stat=displayValue(row["Status"]), fol=displayValue(row["FOL Status (Auto)"]);
   if (stat) bot.appendChild(buildChip(stat, classifyStatus(stat)));
   if (fol&&fol!=="Please enter FOL ID"&&fol!=="#REF!") bot.appendChild(buildChip(fol,"info"));
-
   card.append(top,mid,bot);
   card.addEventListener("click", () => openDrawer(row));
   card.addEventListener("keydown", e => { if(e.key==="Enter") openDrawer(row); });
@@ -313,7 +302,6 @@ function classifyStatus(v) {
   if (s.includes("dissolved")) return "info";
   return "";
 }
-
 // ── LOAD DATA ──
 async function loadData() {
   showEmpty("Initialising…");
@@ -360,7 +348,6 @@ async function loadData() {
     showToast("Load failed","error");
   }
 }
-
 function switchView(name) {
   currentView=name;
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.view===name));
@@ -368,7 +355,6 @@ function switchView(name) {
   if (name==="dashboard") renderDashboard();
   if (name==="week") renderWeekView();
 }
-
 // ── DASHBOARD ──
 function renderDashboard() {
   const root=document.getElementById("dashboard-content");
@@ -383,7 +369,6 @@ function renderDashboard() {
   const forecastCounts=countBy(active,"ForecastMonth", v => v&&v!=="#REF!");
   const hospitalCounts=countBy(allocated,"Hospital", v => v&&!["Enter Ship To","ORTHOKIT","FORECAST ORDER","Not in Hospital Master",""].includes(v));
   const reasonCounts=countBy(unallocated,"Hospital", v => v!=="");
-
   // Default-collapse the larger lists, default-expand overview/allocation
   const sections = [
     { key:"overview", title:"Overview", default:"open", html:`<div class="dash-grid">
@@ -404,7 +389,6 @@ function renderDashboard() {
     { key:"forecast", title:"Upcoming forecast months",  default:"closed",   html:listTile(sortCountsByMonthYear(forecastCounts),10,false) },
     { key:"hospitals",title:"Top hospitals",             default:"closed",   html:listTile(hospitalCounts,10,true) },
   ];
-
   root.innerHTML = sections.map(s => {
     const isCollapsed = collapseState.dash[s.key] !== undefined
       ? collapseState.dash[s.key]
@@ -417,7 +401,6 @@ function renderDashboard() {
       <div class="dash-section-body">${s.html}</div>
     </div>`;
   }).join("");
-
   // Wire collapse-headers
   root.querySelectorAll(".dash-section").forEach(sec => {
     const key = sec.dataset.key;
@@ -426,13 +409,11 @@ function renderDashboard() {
       collapseState.dash[key] = sec.classList.contains("collapsed");
     });
   });
-
   // Tile / list-row click → drill into Browse
   root.querySelectorAll("[data-dash-val]").forEach(el => {
     el.addEventListener("click", e => { e.stopPropagation(); dispatchDashboardAction(el.dataset.dashVal); });
   });
 }
-
 function tile(label, value, sub, kind) {
   const cls=kind?" "+kind:"";
   return `<div class="dash-tile${cls}">
@@ -471,9 +452,10 @@ function sortCountsByMonthYear(counts) {
   });
 }
 function dispatchDashboardAction(value) {
-  const candidates=["filter-fol","filter-week-in","filter-forecast","filter-bu"];
+  const candidates=["filter-status","filter-week-in","filter-bu"];
   for (const id of candidates) {
     const sel=document.getElementById(id);
+    if (!sel) continue;
     for (const opt of sel.options) {
       if (opt.value===value) {
         switchView("browse"); clearFilters();
@@ -485,7 +467,6 @@ function dispatchDashboardAction(value) {
   document.getElementById("search").value=value;
   applyFilters();
 }
-
 // ── WEEK VIEW ──
 function renderWeekView() {
   const root=document.getElementById("week-columns");
@@ -493,11 +474,9 @@ function renderWeekView() {
   const today=new Date(), cw=isoWeek(today), cy=today.getFullYear();
   document.getElementById("week-current-label").textContent="Current week: W"+String(cw).padStart(2,"0")+" ("+cy+")";
   document.getElementById("week-config-info").textContent="";
-
   // Convert (week, year) to a comparable absolute week number for ordering
   const absWeek = (wk, yr) => yr * 53 + wk;
   const cwAbs = absWeek(cw, cy);
-
   const active=allRows.filter(r => !HIDDEN_STATUSES.includes(String(r["Status"]||"")));
   const buckets={ overdue:[], thisweek:[], nextweek:[], later:[], noweek:[] };
   for (const r of active) {
@@ -516,7 +495,6 @@ function renderWeekView() {
   };
   buckets.overdue.sort(sortBy);
   buckets.later.sort(sortBy);
-
   const cols = [
     { key:"overdue",  label:"Overdue", cls:"overdue", rows:buckets.overdue, defaultOpen:true },
     { key:"thisweek", label:"This week (W"+String(cw).padStart(2,"0")+")", cls:"thisweek", rows:buckets.thisweek, defaultOpen:true },
@@ -524,14 +502,12 @@ function renderWeekView() {
     { key:"later",    label:"Later", cls:"", rows:buckets.later, defaultOpen:false },
     { key:"noweek",   label:"No week set", cls:"", rows:buckets.noweek, defaultOpen:false },
   ];
-
   root.innerHTML = cols.map(c => {
     const isCollapsed = collapseState.week[c.key] !== undefined
       ? collapseState.week[c.key]
       : (!c.defaultOpen || c.rows.length===0);
     return weekColHtml(c, isCollapsed);
   }).join("");
-
   root.querySelectorAll(".week-col").forEach(col => {
     const key = col.dataset.key;
     col.querySelector(".week-col-header").addEventListener("click", () => {
@@ -547,7 +523,6 @@ function renderWeekView() {
     });
   });
 }
-
 function weekColHtml(col, isCollapsed) {
   const cards = col.rows.slice(0, 200).map(r => {
     const hosp = displayValue(r["Hospital"]) || "—";
@@ -574,7 +549,6 @@ function weekColHtml(col, isCollapsed) {
     <div class="week-col-body">${body}</div>
   </div>`;
 }
-
 // ── DRAWER ──
 function openDrawer(row) {
   isCreating=false; editingRow=row; editedValues={};
@@ -629,15 +603,14 @@ function openCreateDrawer() {
     wrap.appendChild(inp); g.appendChild(wrap);
   });
   el.appendChild(g);
-  document.getElementById("detail-drawer").classList.remove("hidden");
 }
+  document.getElementById("detail-drawer").classList.remove("hidden");
 function closeDrawer() {
   document.getElementById("detail-drawer").classList.add("hidden");
   document.getElementById("validation-msg").classList.add("hidden");
   editingRow=null; editedValues={}; isCreating=false;
 }
 function onSaveClick(){ isCreating ? createNewRow() : saveEdits(); }
-
 async function saveEdits() {
   if (!editingRow) return;
   const changed=Object.keys(editedValues);
@@ -688,7 +661,6 @@ async function createNewRow() {
   } catch(err){ showToast("Create failed: "+(err.message||err),"error"); }
   finally{ btn.disabled=false; btn.textContent="Create row"; }
 }
-
 // ── DATE / VALUE HELPERS ──
 const MONTH_ABBR=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTH_YEAR_COLS=new Set(["ForecastMonth"]);
