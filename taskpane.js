@@ -1,14 +1,17 @@
 /* ─────────────────────────────────────── */
-/*  Kitting Flow v4                        */
+/*  Kitting Flow v4 — built 2026-06-16 15:17  */
 /* ─────────────────────────────────────── */
+
 const SHEET_NAME = "All Data";
 const DATA_FIRST_COL = "A", DATA_LAST_COL = "AX";
 const HEADER_ROW = 1, MAX_DATA_ROW = 20000, CHUNK_ROWS = 500;
 const PAGE_SIZE = 50;
+
 const CARD_FIELDS = {
   primary:"JDE Module", secondary:"JDE Description",
   group:"Business Unit", hospital:"Hospital", status:"Status",
 };
+
 const SEARCH_FIELDS = [
   "JDE Module","JDE Description","JDE Build number","Module_Build",
   "SAP Module","SAP Serial Number","SAP Description",
@@ -19,10 +22,12 @@ const SEARCH_FIELDS = [
   "Ordering Comment ","S&OP COMMENTS","Kit build comments",
   "BEK Ordering Issue (comments)",
 ];
+
 const UNALLOC_HOSPITALS = new Set([
   "Enter Ship To","ORTHOKIT","FORECAST ORDER","Not in Hospital Master",
 ]);
 const HIDDEN_STATUSES = ["EQUIPMENT SHIPPED","EQUIPMENT DISSOLVED","#REF!"];
+
 function rowIsIssue(row) {
   const bek=String(row["BEK Status (Auto)"]||""), ship=String(row["Can Module Ship?"]||"");
   const loc=String(row["ISSUE LOCATION (Auto)"]||""), stat=String(row["Status"]||"");
@@ -36,11 +41,13 @@ function rowIsAllocated(row) {
   const h = String(row["Hospital"]||"").trim();
   return h!==""&&!UNALLOC_HOSPITALS.has(h);
 }
+
 const FILTER_DROPDOWNS = [
   { id:"filter-bu",      column:"Business Unit",         limit:30 },
   { id:"filter-status",  column:"Status",                limit:15 },
   { id:"filter-week-in", column:"Week To Raise Inbound", limit:60, sort:"weekish" },
 ];
+
 const DETAIL_GROUPS = [
   { title:"Identification", fields:[
     {name:"JDE Module"},{name:"JDE Description"},{name:"JDE Build number"},
@@ -72,6 +79,7 @@ const DETAIL_GROUPS = [
     {name:"Kit build comments",editable:true,multiline:true},
   ]},
 ];
+
 const NEW_ROW_FIELDS = [
   {name:"JDE Module",required:true},{name:"JDE Description",required:true},
   {name:"Business Unit",required:true},{name:"Hospital",required:true},
@@ -81,21 +89,26 @@ const NEW_ROW_FIELDS = [
   {name:"9SE1 order number"},{name:"PO"},
   {name:"Ordering Comment ",multiline:true},{name:"S&OP COMMENTS",multiline:true},
 ];
+
 // ── STATE ──
 let allHeaders=[], headerIndex={}, allRows=[], filteredRows=[];
 let currentPage=0, editingRow=null, editedValues={}, isCreating=false;
 let currentView="browse";
 let activeFilters={ alloc:"", reason:"", hideShipped:true, onlyIssues:false, sapModule:"" };
+
 // Track which dashboard sections / week columns are collapsed (persists during session)
 const collapseState = { dash:{}, week:{} };
+
 // ── BOOTSTRAP ──
 Office.onReady((info)=>{
   if(info.host!==Office.HostType.Excel) return showToast("Run in Excel.","error");
   bindUi(); loadData();
 });
+
 function bindUi() {
   document.getElementById("refresh-btn").addEventListener("click", loadData);
   document.getElementById("new-row-btn").addEventListener("click", openCreateDrawer);
+  document.getElementById("expand-btn").addEventListener("click", openFullscreen);
   document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => switchView(t.dataset.view)));
   document.getElementById("filter-toggle").addEventListener("click", toggleFilterPanel);
   document.getElementById("search").addEventListener("input", debounce(applyFilters, 200));
@@ -121,8 +134,9 @@ function bindUi() {
   document.getElementById("next-page").addEventListener("click", () => { currentPage++; renderRows(); });
   document.getElementById("close-drawer").addEventListener("click", closeDrawer);
   document.getElementById("cancel-edit").addEventListener("click", closeDrawer);
-}
   document.getElementById("save-edit").addEventListener("click", onSaveClick);
+}
+
 // ── FILTER PANEL ──
 let filterPanelOpen=false;
 function toggleFilterPanel() {
@@ -166,9 +180,10 @@ function clearFilters() {
   document.getElementById("toggle-only-issues").classList.remove("active");
   document.getElementById("reason-row").style.display = "none";
   FILTER_DROPDOWNS.forEach(f => { document.getElementById(f.id).value = ""; });
-}
   updateFilterBadge();
   applyFilters();
+}
+
 // ── FILTERS ──
 function applyFilters() {
   const q = document.getElementById("search").value.trim().toLowerCase();
@@ -200,6 +215,7 @@ function applyFilters() {
   updateFilterBadge();
   renderRows();
 }
+
 function populateFilterDropdowns() {
   FILTER_DROPDOWNS.forEach(f => {
     const el = document.getElementById(f.id);
@@ -231,6 +247,7 @@ function pickSorter(kind) {
   };
   return (a,b) => a.localeCompare(b);
 }
+
 // ── RENDER ROWS ──
 function renderRows() {
   const container=document.getElementById("rows-container");
@@ -253,6 +270,7 @@ function renderRows() {
   document.getElementById("prev-page").disabled = currentPage===0;
   document.getElementById("next-page").disabled = currentPage>=total-1;
 }
+
 function buildRowCard(row) {
   const card=document.createElement("div"); card.className="row-card"; card.tabIndex=0;
   const top=document.createElement("div"); top.className="row-card-top";
@@ -261,6 +279,7 @@ function buildRowCard(row) {
   const bu=document.createElement("div"); bu.className="row-bu";
   bu.textContent=displayValue(row[CARD_FIELDS.group]);
   top.append(mod,bu);
+
   const mid=document.createElement("div"); mid.className="row-card-mid";
   const hosp=displayValue(row["Hospital"]), loanset=displayValue(row["Loanset"]);
   const desc=displayValue(row[CARD_FIELDS.secondary]);
@@ -272,10 +291,12 @@ function buildRowCard(row) {
     ? `<span class='row-alloc-badge alloc-yes'>Allocated</span>`
     : `<span class='row-alloc-badge alloc-no'>${escapeHtml(getAllocReason(row))}</span>`);
   mid.innerHTML = html;
+
   const bot=document.createElement("div"); bot.className="row-card-bot";
   const stat=displayValue(row["Status"]), fol=displayValue(row["FOL Status (Auto)"]);
   if (stat) bot.appendChild(buildChip(stat, classifyStatus(stat)));
   if (fol&&fol!=="Please enter FOL ID"&&fol!=="#REF!") bot.appendChild(buildChip(fol,"info"));
+
   card.append(top,mid,bot);
   card.addEventListener("click", () => openDrawer(row));
   card.addEventListener("keydown", e => { if(e.key==="Enter") openDrawer(row); });
@@ -302,6 +323,7 @@ function classifyStatus(v) {
   if (s.includes("dissolved")) return "info";
   return "";
 }
+
 // ── LOAD DATA ──
 async function loadData() {
   showEmpty("Initialising…");
@@ -348,6 +370,7 @@ async function loadData() {
     showToast("Load failed","error");
   }
 }
+
 function switchView(name) {
   currentView=name;
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.view===name));
@@ -355,6 +378,7 @@ function switchView(name) {
   if (name==="dashboard") renderDashboard();
   if (name==="week") renderWeekView();
 }
+
 // ── DASHBOARD ──
 function renderDashboard() {
   const root=document.getElementById("dashboard-content");
@@ -369,6 +393,7 @@ function renderDashboard() {
   const forecastCounts=countBy(active,"ForecastMonth", v => v&&v!=="#REF!");
   const hospitalCounts=countBy(allocated,"Hospital", v => v&&!["Enter Ship To","ORTHOKIT","FORECAST ORDER","Not in Hospital Master",""].includes(v));
   const reasonCounts=countBy(unallocated,"Hospital", v => v!=="");
+
   // Default-collapse the larger lists, default-expand overview/allocation
   const sections = [
     { key:"overview", title:"Overview", default:"open", html:`<div class="dash-grid">
@@ -389,6 +414,7 @@ function renderDashboard() {
     { key:"forecast", title:"Upcoming forecast months",  default:"closed",   html:listTile(sortCountsByMonthYear(forecastCounts),10,false) },
     { key:"hospitals",title:"Top hospitals",             default:"closed",   html:listTile(hospitalCounts,10,true) },
   ];
+
   root.innerHTML = sections.map(s => {
     const isCollapsed = collapseState.dash[s.key] !== undefined
       ? collapseState.dash[s.key]
@@ -401,6 +427,7 @@ function renderDashboard() {
       <div class="dash-section-body">${s.html}</div>
     </div>`;
   }).join("");
+
   // Wire collapse-headers
   root.querySelectorAll(".dash-section").forEach(sec => {
     const key = sec.dataset.key;
@@ -409,11 +436,13 @@ function renderDashboard() {
       collapseState.dash[key] = sec.classList.contains("collapsed");
     });
   });
+
   // Tile / list-row click → drill into Browse
   root.querySelectorAll("[data-dash-val]").forEach(el => {
     el.addEventListener("click", e => { e.stopPropagation(); dispatchDashboardAction(el.dataset.dashVal); });
   });
 }
+
 function tile(label, value, sub, kind) {
   const cls=kind?" "+kind:"";
   return `<div class="dash-tile${cls}">
@@ -467,6 +496,7 @@ function dispatchDashboardAction(value) {
   document.getElementById("search").value=value;
   applyFilters();
 }
+
 // ── WEEK VIEW ──
 function renderWeekView() {
   const root=document.getElementById("week-columns");
@@ -474,9 +504,11 @@ function renderWeekView() {
   const today=new Date(), cw=isoWeek(today), cy=today.getFullYear();
   document.getElementById("week-current-label").textContent="Current week: W"+String(cw).padStart(2,"0")+" ("+cy+")";
   document.getElementById("week-config-info").textContent="";
+
   // Convert (week, year) to a comparable absolute week number for ordering
   const absWeek = (wk, yr) => yr * 53 + wk;
   const cwAbs = absWeek(cw, cy);
+
   const active=allRows.filter(r => !HIDDEN_STATUSES.includes(String(r["Status"]||"")));
   const buckets={ overdue:[], thisweek:[], nextweek:[], later:[], noweek:[] };
   for (const r of active) {
@@ -495,6 +527,7 @@ function renderWeekView() {
   };
   buckets.overdue.sort(sortBy);
   buckets.later.sort(sortBy);
+
   const cols = [
     { key:"overdue",  label:"Overdue", cls:"overdue", rows:buckets.overdue, defaultOpen:true },
     { key:"thisweek", label:"This week (W"+String(cw).padStart(2,"0")+")", cls:"thisweek", rows:buckets.thisweek, defaultOpen:true },
@@ -502,12 +535,14 @@ function renderWeekView() {
     { key:"later",    label:"Later", cls:"", rows:buckets.later, defaultOpen:false },
     { key:"noweek",   label:"No week set", cls:"", rows:buckets.noweek, defaultOpen:false },
   ];
+
   root.innerHTML = cols.map(c => {
     const isCollapsed = collapseState.week[c.key] !== undefined
       ? collapseState.week[c.key]
       : (!c.defaultOpen || c.rows.length===0);
     return weekColHtml(c, isCollapsed);
   }).join("");
+
   root.querySelectorAll(".week-col").forEach(col => {
     const key = col.dataset.key;
     col.querySelector(".week-col-header").addEventListener("click", () => {
@@ -523,6 +558,7 @@ function renderWeekView() {
     });
   });
 }
+
 function weekColHtml(col, isCollapsed) {
   const cards = col.rows.slice(0, 200).map(r => {
     const hosp = displayValue(r["Hospital"]) || "—";
@@ -549,6 +585,7 @@ function weekColHtml(col, isCollapsed) {
     <div class="week-col-body">${body}</div>
   </div>`;
 }
+
 // ── DRAWER ──
 function openDrawer(row) {
   isCreating=false; editingRow=row; editedValues={};
@@ -603,14 +640,100 @@ function openCreateDrawer() {
     wrap.appendChild(inp); g.appendChild(wrap);
   });
   el.appendChild(g);
-}
   document.getElementById("detail-drawer").classList.remove("hidden");
+}
 function closeDrawer() {
   document.getElementById("detail-drawer").classList.add("hidden");
   document.getElementById("validation-msg").classList.add("hidden");
   editingRow=null; editedValues={}; isCreating=false;
 }
 function onSaveClick(){ isCreating ? createNewRow() : saveEdits(); }
+
+// ── FULLSCREEN DIALOG ─────────────────────
+// The dialog can't touch the workbook itself, so the task pane streams data
+// to it and performs Excel writes on its behalf.
+let fsDialog = null;
+const FS_CHUNK = 400; // rows per messageChild (stay well under message size limits)
+
+function openFullscreen() {
+  if (!allRows.length) { showToast("Load data first.","error"); return; }
+  const url = window.location.href.replace(/taskpane\.html.*$/, "fullscreen.html");
+  Office.context.ui.displayDialogAsync(url,
+    { width: 96, height: 94, displayInIframe: false },
+    (res) => {
+      if (res.status !== Office.AsyncResultStatus.Succeeded) {
+        showToast("Couldn't open full screen: " + res.error.message, "error");
+        return;
+      }
+      fsDialog = res.value;
+      fsDialog.addEventHandler(Office.EventType.DialogMessageReceived, onDialogMessage);
+      fsDialog.addEventHandler(Office.EventType.DialogEventReceived, () => { fsDialog = null; });
+    }
+  );
+}
+
+function onDialogMessage(arg) {
+  let m;
+  try { m = JSON.parse(arg.message); } catch { return; }
+  if (m.type === "ready") {
+    streamRowsToDialog();
+  } else if (m.type === "save") {
+    saveFromDialog(m.row, m.edits);
+  } else if (m.type === "create") {
+    createFromDialog(m.values);
+  }
+}
+
+async function createFromDialog(values) {
+  try {
+    const nr = await createRowInSheet(values);
+    renderRows();
+    const newObj = allRows.find(r => r._row === nr);
+    if (fsDialog) fsDialog.messageChild(JSON.stringify({ type:"createResult", ok:true, row:newObj }));
+  } catch(err) {
+    if (fsDialog) fsDialog.messageChild(JSON.stringify({ type:"createResult", ok:false, error:String(err.message||err) }));
+  }
+}
+
+function streamRowsToDialog() {
+  if (!fsDialog) return;
+  const chunks = [];
+  for (let i = 0; i < allRows.length; i += FS_CHUNK) {
+    chunks.push(allRows.slice(i, i + FS_CHUNK));
+  }
+  fsDialog.messageChild(JSON.stringify({ type:"meta", chunks: chunks.length }));
+  // Send sequentially with tiny delays to avoid dropped messages
+  let idx = 0;
+  const sendNext = () => {
+    if (!fsDialog || idx >= chunks.length) return;
+    fsDialog.messageChild(JSON.stringify({ type:"chunk", rows: chunks[idx] }));
+    idx++;
+    if (idx < chunks.length) setTimeout(sendNext, 15);
+  };
+  sendNext();
+}
+
+async function saveFromDialog(sheetRow, edits) {
+  try {
+    await Excel.run(async ctx => {
+      const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
+      Object.keys(edits).forEach(col => {
+        const idx = headerIndex[col];
+        if (idx === undefined) return;
+        sheet.getRange(colLetter(idx) + sheetRow).values = [[ edits[col] ]];
+      });
+      await ctx.sync();
+    });
+    // update pane's local cache too
+    const r = allRows.find(x => x._row === sheetRow);
+    if (r) Object.keys(edits).forEach(k => { r[k] = edits[k]; });
+    renderRows();
+    if (fsDialog) fsDialog.messageChild(JSON.stringify({ type:"saveResult", ok:true, row:sheetRow, edits:edits }));
+  } catch(err) {
+    if (fsDialog) fsDialog.messageChild(JSON.stringify({ type:"saveResult", ok:false, row:sheetRow, error:String(err.message||err) }));
+  }
+}
+
 async function saveEdits() {
   if (!editingRow) return;
   const changed=Object.keys(editedValues);
@@ -631,6 +754,41 @@ async function saveEdits() {
   } catch(err){ showToast("Save failed: "+(err.message||err),"error"); }
   finally{ btn.disabled=false; btn.textContent="Save changes"; }
 }
+// Creates a row in the sheet, preserving formulas from the row above.
+// copyFrom(...formulas) auto-adjusts relative references like dragging a formula
+// down in Excel. Then: user values overwrite their cells; copied constants are cleared.
+async function createRowInSheet(values) {
+  let nr = HEADER_ROW + 1;
+  for (const r of allRows) if (r._row >= nr) nr = r._row + 1;
+  await Excel.run(async ctx => {
+    const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
+    const lastCol = colLetter(allHeaders.length - 1);
+    const prevAddr = "A" + (nr-1) + ":" + lastCol + (nr-1);
+    const newAddr  = "A" + nr     + ":" + lastCol + nr;
+    const newRange = sheet.getRange(newAddr);
+    // Step 1: copy formulas from row above (relative refs adjust automatically)
+    newRange.copyFrom(prevAddr, Excel.RangeCopyType.formulas);
+    newRange.load("formulas");
+    await ctx.sync();
+    // Step 2: keep real formulas, insert user values, clear copied constants
+    const copied = newRange.formulas[0];
+    const out = copied.map((cell, i) => {
+      const col = allHeaders[i];
+      if (values[col] !== undefined && values[col] !== "") return values[col];
+      if (typeof cell === "string" && cell.charAt(0) === "=") return cell;
+      return "";
+    });
+    newRange.formulas = [out];
+    sheet.getRange("A" + nr).select();
+    await ctx.sync();
+  });
+  // Local cache: user values now; formula cells show after next Refresh
+  const obj = { _row: nr };
+  allHeaders.forEach(h => { obj[h] = values[h] !== undefined ? values[h] : ""; });
+  allRows.push(obj);
+  return nr;
+}
+
 async function createNewRow() {
   const missing=[];
   document.querySelectorAll("#detail-fields [data-field-name]").forEach(inp => {
@@ -645,22 +803,13 @@ async function createNewRow() {
   vm.classList.add("hidden");
   const btn=document.getElementById("save-edit"); btn.disabled=true; btn.textContent="Creating…";
   try {
-    let nr=HEADER_ROW+1;
-    for (const r of allRows) if (r._row>=nr) nr=r._row+1;
-    await Excel.run(async ctx => {
-      const sheet=ctx.workbook.worksheets.getItem(SHEET_NAME);
-      const vals=new Array(allHeaders.length).fill("");
-      Object.keys(editedValues).forEach(col => { const i=headerIndex[col]; if (i!==undefined) vals[i]=editedValues[col]; });
-      sheet.getRange("A"+nr+":"+colLetter(allHeaders.length-1)+nr).values=[vals];
-      sheet.getRange("A"+nr).select(); await ctx.sync();
-    });
-    const obj={ _row:nr }; allHeaders.forEach(h => { obj[h]=editedValues[h]||""; });
-    allRows.push(obj);
-    showToast("Row created (row "+nr+")","success");
+    const nr = await createRowInSheet(editedValues);
+    showToast("Row created (row "+nr+") — formulas copied from row above","success");
     populateFilterDropdowns(); applyFilters(); closeDrawer();
   } catch(err){ showToast("Create failed: "+(err.message||err),"error"); }
   finally{ btn.disabled=false; btn.textContent="Create row"; }
 }
+
 // ── DATE / VALUE HELPERS ──
 const MONTH_ABBR=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const MONTH_YEAR_COLS=new Set(["ForecastMonth"]);
