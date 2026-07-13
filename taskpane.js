@@ -108,7 +108,7 @@ Office.onReady((info)=>{
 function bindUi() {
   document.getElementById("refresh-btn").addEventListener("click", loadData);
   document.getElementById("new-row-btn").addEventListener("click", openCreateDrawer);
-  document.getElementById("expand-btn").addEventListener("click", openFullscreen);
+  document.getElementById("wide-btn").addEventListener("click", toggleWide);
   document.querySelectorAll(".tab").forEach(t => t.addEventListener("click", () => switchView(t.dataset.view)));
   document.getElementById("filter-toggle").addEventListener("click", toggleFilterPanel);
   document.getElementById("search").addEventListener("input", debounce(applyFilters, 200));
@@ -265,10 +265,55 @@ function renderRows() {
   currentPage = Math.max(0, Math.min(currentPage, total-1));
   const slice = filteredRows.slice(currentPage*PAGE_SIZE, (currentPage+1)*PAGE_SIZE);
   container.innerHTML = "";
-  slice.forEach(row => container.appendChild(buildRowCard(row)));
+  if (wideMode) {
+    container.appendChild(buildWideTable(slice));
+  } else {
+    slice.forEach(row => container.appendChild(buildRowCard(row)));
+  }
   document.getElementById("page-info").textContent = (currentPage+1)+" / "+total;
   document.getElementById("prev-page").disabled = currentPage===0;
   document.getElementById("next-page").disabled = currentPage>=total-1;
+}
+
+function buildWideTable(slice) {
+  const tbl = document.createElement("table");
+  tbl.className = "wide-table";
+  const thead = document.createElement("thead");
+  const htr = document.createElement("tr");
+  WIDE_COLUMNS.forEach(c => {
+    const th = document.createElement("th");
+    th.textContent = c.label;
+    th.style.minWidth = c.w + "px";
+    htr.appendChild(th);
+  });
+  thead.appendChild(htr);
+  tbl.appendChild(thead);
+  const tbody = document.createElement("tbody");
+  slice.forEach(row => {
+    const tr = document.createElement("tr");
+    WIDE_COLUMNS.forEach(c => {
+      const td = document.createElement("td");
+      let v = displayValue(row[c.key]);
+      if (c.pill && v) {
+        td.innerHTML = `<span class="chip ${chipCls(v)}">${escapeHtml(v)}</span>`;
+      } else {
+        td.textContent = v;
+        td.title = v;
+      }
+      tr.appendChild(td);
+    });
+    tr.addEventListener("click", () => openDrawer(row));
+    tbody.appendChild(tr);
+  });
+  tbl.appendChild(tbody);
+  return tbl;
+}
+function chipCls(v){
+  const s=v.toLowerCase();
+  if(s.includes("shipped")||s.includes("built"))return "chip-good";
+  if(s.includes("issue")||s==="#ref!")return "chip-bad";
+  if(s.includes("await")||s.includes("orthokit")||s.includes("topup"))return "chip-warn";
+  return "";
 }
 
 function buildRowCard(row) {
@@ -649,105 +694,30 @@ function closeDrawer() {
 }
 function onSaveClick(){ isCreating ? createNewRow() : saveEdits(); }
 
-// ── FULLSCREEN WINDOW ─────────────────────
-// Transport: window.open + postMessage (same-origin windows).
-// No Office Dialog APIs, no localStorage — immune to API-version and
-// storage-partitioning issues. The pane owns all Excel reads/writes.
-let fsWin = null;
-const FS_FIELDS = ["_row","JDE Module","JDE Description","JDE Build number","Business Unit",
-  "Status","Hospital","Loanset","SAP Module","SAP Serial Number","SAP Description",
-  "Final Shipment Week","Week To Raise Inbound","9SE1 order number","PO","FID ",
-  "Set Reference","Ordering Comment ","S&OP COMMENTS","Kit build comments"];
-const FS_CHUNK = 2000;
+// ── WIDE TABLE MODE ───────────────────────
+// No popup, no separate file. Toggles the Browse list between compact cards
+// and a wide multi-column table that uses horizontal space when the user
+// drags the task pane wider. Everything stays in one pane.
+let wideMode = false;
+const WIDE_COLUMNS = [
+  { key:"JDE Module",          label:"Module",     w:120 },
+  { key:"JDE Description",     label:"Description", w:200 },
+  { key:"Business Unit",       label:"BU",         w:90  },
+  { key:"Status",             label:"Status",      w:150, pill:true },
+  { key:"Hospital",           label:"Hospital",    w:170 },
+  { key:"Loanset",            label:"Loanset",     w:90  },
+  { key:"SAP Module",         label:"SAP Mod",     w:110 },
+  { key:"Final Shipment Week",label:"Ship wk",     w:80  },
+  { key:"Week To Raise Inbound",label:"Inb wk",    w:75  },
+  { key:"9SE1 order number",  label:"9SE1",        w:100 },
+  { key:"PO",                 label:"PO",          w:100 },
+];
 
-window.addEventListener("message", (e) => {
-  // We trust by window identity (e.source), not origin string, because the
-  // pane may run under an Office origin while the popup is on github.io.
-  if (!fsWin || e.source !== fsWin) return;
-  const m = e.data;
-  if (!m || typeof m !== "object") return;
-  if (m.type === "ready") {
-    streamRowsToWindow();
-  } else if (m.type === "save") {
-    saveFromDialog(m.reqId, m.row, m.edits);
-  } else if (m.type === "create") {
-    createFromDialog(m.reqId, m.values);
-  }
-});
-
-// If the auto-detected URL ever fails, set this to your Pages folder URL
-// (with trailing slash), e.g. "https://ankurbhalla902.github.io/kitting-taskpane/"
-const FS_BASE_URL_OVERRIDE = "";
-
-function openFullscreen() {
-  if (!allRows.length) { showToast("Load data first.","error"); return; }
-  let url;
-  if (FS_BASE_URL_OVERRIDE) {
-    url = FS_BASE_URL_OVERRIDE.replace(/\/?$/, "/") + "fullscreen.html";
-  } else {
-    const loc = window.location;
-    const dir = loc.pathname.substring(0, loc.pathname.lastIndexOf("/") + 1);
-    url = loc.origin + dir + "fullscreen.html";
-  }
-  const w = Math.round(screen.availWidth * 0.96);
-  const h = Math.round(screen.availHeight * 0.92);
-  fsWin = window.open(url, "kittingFullscreen",
-    "width=" + w + ",height=" + h + ",left=" + Math.round((screen.availWidth-w)/2) + ",top=20");
-  if (!fsWin) {
-    showToast("Popup blocked — allow popups, then click Expand again.", "error");
-  } else {
-    // brief confirmation of what we opened, helps diagnose 404s
-    showToast("Opening full screen…", "success");
-  }
-}
-
-function streamRowsToWindow() {
-  if (!fsWin) return;
-  const slim = allRows.map(r => FS_FIELDS.map(f => {
-    const v = r[f];
-    return (v === "" || v == null) ? 0 : v;
-  }));
-  fsWin.postMessage({ type:"meta", fields: FS_FIELDS, total: slim.length }, "*");
-  for (let i = 0; i < slim.length; i += FS_CHUNK) {
-    fsWin.postMessage({ type:"chunk", rows: slim.slice(i, i + FS_CHUNK),
-      done: i + FS_CHUNK >= slim.length }, "*");
-  }
-}
-
-function postResultToDialog(payload) {
-  if (fsWin && !fsWin.closed) fsWin.postMessage(payload, "*");
-}
-
-async function createFromDialog(reqId, values) {
-  try {
-    const nr = await createRowInSheet(values);
-    renderRows();
-    const full = allRows.find(r => r._row === nr);
-    const slim = {}; FS_FIELDS.forEach(f => { if (full && full[f] != null) slim[f] = full[f]; });
-    postResultToDialog({ type:"createResult", reqId:reqId, ok:true, row:slim });
-  } catch(err) {
-    postResultToDialog({ type:"createResult", reqId:reqId, ok:false, error:String(err.message||err) });
-  }
-}
-
-async function saveFromDialog(reqId, sheetRow, edits) {
-  try {
-    await Excel.run(async ctx => {
-      const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
-      Object.keys(edits).forEach(col => {
-        const idx = headerIndex[col];
-        if (idx === undefined) return;
-        sheet.getRange(colLetter(idx) + sheetRow).values = [[ edits[col] ]];
-      });
-      await ctx.sync();
-    });
-    const r = allRows.find(x => x._row === sheetRow);
-    if (r) Object.keys(edits).forEach(k => { r[k] = edits[k]; });
-    renderRows();
-    postResultToDialog({ type:"saveResult", reqId:reqId, ok:true, row:sheetRow, edits:edits });
-  } catch(err) {
-    postResultToDialog({ type:"saveResult", reqId:reqId, ok:false, row:sheetRow, error:String(err.message||err) });
-  }
+function toggleWide() {
+  wideMode = !wideMode;
+  document.getElementById("wide-btn").classList.toggle("active", wideMode);
+  document.getElementById("view-browse").classList.toggle("wide-mode", wideMode);
+  renderRows();
 }
 
 async function saveEdits() {
