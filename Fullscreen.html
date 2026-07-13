@@ -213,7 +213,8 @@ let meta = null;
 let arrays = [];
 
 window.addEventListener("message", (e) => {
-  if (e.origin !== window.location.origin) return;
+  // Trust the opener window; origins may differ (Office vs github.io)
+  if (parentWin && e.source !== parentWin) return;
   const m = e.data;
   if (!m || typeof m !== "object") return;
   if (m.type === "meta") {
@@ -246,7 +247,7 @@ function decodeAndInit() {
 }
 
 function sendToParent(payload) {
-  if (parentWin && !parentWin.closed) parentWin.postMessage(payload, window.location.origin);
+  if (parentWin && !parentWin.closed) parentWin.postMessage(payload, "*");
   else toast("Task pane window closed — reopen it in Excel.", "err");
 }
 
