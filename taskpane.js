@@ -650,13 +650,44 @@ function closeDrawer() {
 function onSaveClick(){ isCreating ? createNewRow() : saveEdits(); }
 
 // ── FULLSCREEN DIALOG ─────────────────────
-// The dialog can't touch the workbook itself, so the task pane streams data
-// to it and performs Excel writes on its behalf.
+// Transport strategy (works without DialogApi 1.2):
+//   pane → dialog:  localStorage (same GitHub Pages origin, shared across windows)
+//   dialog → pane:  Office messageParent (DialogApi 1.1, universally supported)
+//   pane → dialog results: localStorage + the browser 'storage' event
 let fsDialog = null;
-const FS_CHUNK = 400; // rows per messageChild (stay well under message size limits)
+// Only ship the fields the fullscreen actually uses — keeps localStorage well under quota
+const FS_FIELDS = ["_row","JDE Module","JDE Description","JDE Build number","Business Unit",
+  "Status","Hospital","Loanset","SAP Module","SAP Serial Number","SAP Description",
+  "Final Shipment Week","Week To Raise Inbound","9SE1 order number","PO","FID ",
+  "Set Reference","Ordering Comment ","S&OP COMMENTS","Kit build comments"];
+const LS_PREFIX = "kf_";
+const LS_CHUNK_ROWS = 1000;
 
 function openFullscreen() {
   if (!allRows.length) { showToast("Load data first.","error"); return; }
+  // 1. Write slimmed data to localStorage in chunks
+  try {
+    // clear old keys
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf(LS_PREFIX) === 0) localStorage.removeItem(k);
+    }
+    const slim = allRows.map(r => {
+      const o = {};
+      FS_FIELDS.forEach(f => { const v = r[f]; if (v !== "" && v != null) o[f] = v; });
+      return o;
+    });
+    const nChunks = Math.ceil(slim.length / LS_CHUNK_ROWS);
+    for (let i = 0; i < nChunks; i++) {
+      localStorage.setItem(LS_PREFIX + "chunk_" + i,
+        JSON.stringify(slim.slice(i*LS_CHUNK_ROWS, (i+1)*LS_CHUNK_ROWS)));
+    }
+    localStorage.setItem(LS_PREFIX + "meta", JSON.stringify({ chunks:nChunks, total:slim.length, ts:Date.now() }));
+  } catch(e) {
+    showToast("Couldn't stage data (storage full?): " + e.message, "error");
+    return;
+  }
+  // 2. Open the dialog — it reads localStorage on load
   const url = window.location.href.replace(/taskpane\.html.*$/, "fullscreen.html");
   Office.context.ui.displayDialogAsync(url,
     { width: 96, height: 94, displayInIframe: false },
@@ -675,45 +706,33 @@ function openFullscreen() {
 function onDialogMessage(arg) {
   let m;
   try { m = JSON.parse(arg.message); } catch { return; }
-  if (m.type === "ready") {
-    streamRowsToDialog();
-  } else if (m.type === "save") {
-    saveFromDialog(m.row, m.edits);
+  if (m.type === "save") {
+    saveFromDialog(m.reqId, m.row, m.edits);
   } else if (m.type === "create") {
-    createFromDialog(m.values);
+    createFromDialog(m.reqId, m.values);
   }
 }
 
-async function createFromDialog(values) {
+// Results go back through localStorage; the dialog listens for 'storage' events.
+function postResultToDialog(payload) {
+  try {
+    localStorage.setItem(LS_PREFIX + "result", JSON.stringify(Object.assign({ ts:Date.now() }, payload)));
+  } catch(e) { /* dialog will show its own timeout */ }
+}
+
+async function createFromDialog(reqId, values) {
   try {
     const nr = await createRowInSheet(values);
     renderRows();
-    const newObj = allRows.find(r => r._row === nr);
-    if (fsDialog) fsDialog.messageChild(JSON.stringify({ type:"createResult", ok:true, row:newObj }));
+    const full = allRows.find(r => r._row === nr);
+    const slim = {}; FS_FIELDS.forEach(f => { if (full && full[f] != null) slim[f] = full[f]; });
+    postResultToDialog({ type:"createResult", reqId:reqId, ok:true, row:slim });
   } catch(err) {
-    if (fsDialog) fsDialog.messageChild(JSON.stringify({ type:"createResult", ok:false, error:String(err.message||err) }));
+    postResultToDialog({ type:"createResult", reqId:reqId, ok:false, error:String(err.message||err) });
   }
 }
 
-function streamRowsToDialog() {
-  if (!fsDialog) return;
-  const chunks = [];
-  for (let i = 0; i < allRows.length; i += FS_CHUNK) {
-    chunks.push(allRows.slice(i, i + FS_CHUNK));
-  }
-  fsDialog.messageChild(JSON.stringify({ type:"meta", chunks: chunks.length }));
-  // Send sequentially with tiny delays to avoid dropped messages
-  let idx = 0;
-  const sendNext = () => {
-    if (!fsDialog || idx >= chunks.length) return;
-    fsDialog.messageChild(JSON.stringify({ type:"chunk", rows: chunks[idx] }));
-    idx++;
-    if (idx < chunks.length) setTimeout(sendNext, 15);
-  };
-  sendNext();
-}
-
-async function saveFromDialog(sheetRow, edits) {
+async function saveFromDialog(reqId, sheetRow, edits) {
   try {
     await Excel.run(async ctx => {
       const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
@@ -724,13 +743,12 @@ async function saveFromDialog(sheetRow, edits) {
       });
       await ctx.sync();
     });
-    // update pane's local cache too
     const r = allRows.find(x => x._row === sheetRow);
     if (r) Object.keys(edits).forEach(k => { r[k] = edits[k]; });
     renderRows();
-    if (fsDialog) fsDialog.messageChild(JSON.stringify({ type:"saveResult", ok:true, row:sheetRow, edits:edits }));
+    postResultToDialog({ type:"saveResult", reqId:reqId, ok:true, row:sheetRow, edits:edits });
   } catch(err) {
-    if (fsDialog) fsDialog.messageChild(JSON.stringify({ type:"saveResult", ok:false, row:sheetRow, error:String(err.message||err) }));
+    postResultToDialog({ type:"saveResult", reqId:reqId, ok:false, row:sheetRow, error:String(err.message||err) });
   }
 }
 
