@@ -661,7 +661,8 @@ const FS_FIELDS = ["_row","JDE Module","JDE Description","JDE Build number","Bus
 const FS_CHUNK = 2000;
 
 window.addEventListener("message", (e) => {
-  if (e.origin !== window.location.origin) return;
+  // We trust by window identity (e.source), not origin string, because the
+  // pane may run under an Office origin while the popup is on github.io.
   if (!fsWin || e.source !== fsWin) return;
   const m = e.data;
   if (!m || typeof m !== "object") return;
@@ -674,15 +675,29 @@ window.addEventListener("message", (e) => {
   }
 });
 
+// If the auto-detected URL ever fails, set this to your Pages folder URL
+// (with trailing slash), e.g. "https://ankurbhalla902.github.io/kitting-taskpane/"
+const FS_BASE_URL_OVERRIDE = "";
+
 function openFullscreen() {
   if (!allRows.length) { showToast("Load data first.","error"); return; }
-  const url = window.location.href.replace(/taskpane\.html.*$/, "fullscreen.html");
+  let url;
+  if (FS_BASE_URL_OVERRIDE) {
+    url = FS_BASE_URL_OVERRIDE.replace(/\/?$/, "/") + "fullscreen.html";
+  } else {
+    const loc = window.location;
+    const dir = loc.pathname.substring(0, loc.pathname.lastIndexOf("/") + 1);
+    url = loc.origin + dir + "fullscreen.html";
+  }
   const w = Math.round(screen.availWidth * 0.96);
   const h = Math.round(screen.availHeight * 0.92);
   fsWin = window.open(url, "kittingFullscreen",
     "width=" + w + ",height=" + h + ",left=" + Math.round((screen.availWidth-w)/2) + ",top=20");
   if (!fsWin) {
-    showToast("Popup blocked — allow popups for this add-in and try again.", "error");
+    showToast("Popup blocked — allow popups, then click Expand again.", "error");
+  } else {
+    // brief confirmation of what we opened, helps diagnose 404s
+    showToast("Opening full screen…", "success");
   }
 }
 
@@ -692,15 +707,15 @@ function streamRowsToWindow() {
     const v = r[f];
     return (v === "" || v == null) ? 0 : v;
   }));
-  fsWin.postMessage({ type:"meta", fields: FS_FIELDS, total: slim.length }, window.location.origin);
+  fsWin.postMessage({ type:"meta", fields: FS_FIELDS, total: slim.length }, "*");
   for (let i = 0; i < slim.length; i += FS_CHUNK) {
     fsWin.postMessage({ type:"chunk", rows: slim.slice(i, i + FS_CHUNK),
-      done: i + FS_CHUNK >= slim.length }, window.location.origin);
+      done: i + FS_CHUNK >= slim.length }, "*");
   }
 }
 
 function postResultToDialog(payload) {
-  if (fsWin && !fsWin.closed) fsWin.postMessage(payload, window.location.origin);
+  if (fsWin && !fsWin.closed) fsWin.postMessage(payload, "*");
 }
 
 async function createFromDialog(reqId, values) {
