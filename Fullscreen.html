@@ -218,6 +218,7 @@ Office.onReady(() => {
   window.addEventListener("storage", (e) => {
     if (e.key === LS_PREFIX + "result" && e.newValue) {
       let m; try { m = JSON.parse(e.newValue); } catch { return; }
+      if (m.type === "rowDetail") { onRowDetail(m); return; }
       if (pendingReq !== null && m.reqId !== pendingReq) return;
       pendingReq = null;
       if (m.type === "saveResult") onSaveResult(m);
@@ -235,10 +236,20 @@ function loadFromStorage() {
       return;
     }
     const meta = JSON.parse(metaRaw);
+    const fields = meta.fields;
     rows = [];
     for (let i = 0; i < meta.chunks; i++) {
       const c = localStorage.getItem(LS_PREFIX + "chunk_" + i);
-      if (c) rows.push(...JSON.parse(c));
+      if (c) {
+        const arrays = JSON.parse(c);
+        for (const arr of arrays) {
+          const o = {};
+          for (let j = 0; j < fields.length; j++) {
+            o[fields[j]] = arr[j] === 0 ? "" : arr[j];   // 0 = empty marker
+          }
+          rows.push(o);
+        }
+      }
       document.getElementById("load-msg").textContent =
         "Loading… " + Math.round((i+1)/meta.chunks*100) + "% (" + rows.length.toLocaleString() + " rows)";
     }
@@ -564,6 +575,9 @@ function onCreateResult(m) {
 }
 
 // ── edit panel ──
+const HEAVY_FIELDS = new Set(["Ordering Comment ","S&OP COMMENTS","Kit build comments"]);
+let detailReq = null; // reqId of pending row-detail fetch
+
 function openPanel(row) {
   creating = false;
   editing = row; edits = {};
@@ -575,6 +589,7 @@ function openPanel(row) {
     const div = document.createElement("div"); div.className = "f";
     const lbl = document.createElement("label"); lbl.textContent = k.trim();
     div.appendChild(lbl);
+    const isHeavy = HEAVY_FIELDS.has(k) && !(k in row);
     if (!EDITABLE.has(k)) {
       const ro = document.createElement("div"); ro.className = "ro";
       ro.textContent = editing[k] == null ? "" : String(editing[k]);
@@ -582,13 +597,33 @@ function openPanel(row) {
     } else {
       const inp = MULTILINE.has(k) ? document.createElement("textarea") : document.createElement("input");
       if (MULTILINE.has(k)) inp.rows = 3;
-      inp.value = editing[k] == null ? "" : String(editing[k]);
+      inp.dataset.k = k;
+      if (isHeavy) { inp.value = ""; inp.placeholder = "Loading…"; inp.disabled = true; }
+      else inp.value = editing[k] == null ? "" : String(editing[k]);
       inp.addEventListener("input", () => { edits[k] = inp.value; });
       div.appendChild(inp);
     }
     body.appendChild(div);
   });
   document.getElementById("panel").classList.add("open");
+  // Fetch heavy comment fields for this row from the task pane
+  detailReq = ++reqCounter;
+  try {
+    Office.context.ui.messageParent(JSON.stringify({ type:"getRow", reqId:detailReq, row: row._row }));
+  } catch(e) { /* pane closed; fields stay disabled */ }
+}
+
+function onRowDetail(m) {
+  if (!editing || m.row !== editing._row) return;
+  Object.keys(m.values).forEach(k => { editing[k] = m.values[k]; });
+  // Fill the waiting inputs
+  document.querySelectorAll("#p-body [data-k]").forEach(inp => {
+    if (HEAVY_FIELDS.has(inp.dataset.k)) {
+      inp.disabled = false;
+      inp.placeholder = "";
+      if (!(inp.dataset.k in edits)) inp.value = m.values[inp.dataset.k] == null ? "" : String(m.values[inp.dataset.k]);
+    }
+  });
 }
 function closePanel() {
   document.getElementById("panel").classList.remove("open");
