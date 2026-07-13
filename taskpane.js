@@ -649,81 +649,58 @@ function closeDrawer() {
 }
 function onSaveClick(){ isCreating ? createNewRow() : saveEdits(); }
 
-// ── FULLSCREEN DIALOG ─────────────────────
-// Transport strategy (works without DialogApi 1.2):
-//   pane → dialog:  localStorage (same GitHub Pages origin, shared across windows)
-//   dialog → pane:  Office messageParent (DialogApi 1.1, universally supported)
-//   pane → dialog results: localStorage + the browser 'storage' event
-let fsDialog = null;
-// Light fields streamed to the dialog as arrays (field names sent once, not per row).
-// Heavy comment fields are fetched per-row on demand to stay under localStorage quota.
-const FS_LIGHT_FIELDS = ["_row","JDE Module","JDE Description","JDE Build number","Business Unit",
+// ── FULLSCREEN WINDOW ─────────────────────
+// Transport: window.open + postMessage (same-origin windows).
+// No Office Dialog APIs, no localStorage — immune to API-version and
+// storage-partitioning issues. The pane owns all Excel reads/writes.
+let fsWin = null;
+const FS_FIELDS = ["_row","JDE Module","JDE Description","JDE Build number","Business Unit",
   "Status","Hospital","Loanset","SAP Module","SAP Serial Number","SAP Description",
-  "Final Shipment Week","Week To Raise Inbound","9SE1 order number","PO","FID ","Set Reference"];
-const FS_HEAVY_FIELDS = ["Ordering Comment ","S&OP COMMENTS","Kit build comments"];
-const LS_PREFIX = "kf_";
-const LS_CHUNK_ROWS = 2000;
+  "Final Shipment Week","Week To Raise Inbound","9SE1 order number","PO","FID ",
+  "Set Reference","Ordering Comment ","S&OP COMMENTS","Kit build comments"];
+const FS_CHUNK = 2000;
 
-function openFullscreen() {
-  if (!allRows.length) { showToast("Load data first.","error"); return; }
-  // 1. Write slimmed data to localStorage in chunks (array format — no repeated keys)
-  try {
-    for (let i = localStorage.length - 1; i >= 0; i--) {
-      const k = localStorage.key(i);
-      if (k && k.indexOf(LS_PREFIX) === 0) localStorage.removeItem(k);
-    }
-    const arrays = allRows.map(r => FS_LIGHT_FIELDS.map(f => {
-      const v = r[f];
-      return (v === "" || v == null) ? 0 : v;   // 0 = empty marker (1 char in JSON)
-    }));
-    const nChunks = Math.ceil(arrays.length / LS_CHUNK_ROWS);
-    for (let i = 0; i < nChunks; i++) {
-      localStorage.setItem(LS_PREFIX + "chunk_" + i,
-        JSON.stringify(arrays.slice(i*LS_CHUNK_ROWS, (i+1)*LS_CHUNK_ROWS)));
-    }
-    localStorage.setItem(LS_PREFIX + "meta",
-      JSON.stringify({ fields: FS_LIGHT_FIELDS, chunks:nChunks, total:arrays.length, ts:Date.now() }));
-  } catch(e) {
-    showToast("Couldn't stage data: " + e.message, "error");
-    return;
-  }
-  // 2. Open the dialog — it reads localStorage on load
-  const url = window.location.href.replace(/taskpane\.html.*$/, "fullscreen.html");
-  Office.context.ui.displayDialogAsync(url,
-    { width: 96, height: 94, displayInIframe: false },
-    (res) => {
-      if (res.status !== Office.AsyncResultStatus.Succeeded) {
-        showToast("Couldn't open full screen: " + res.error.message, "error");
-        return;
-      }
-      fsDialog = res.value;
-      fsDialog.addEventHandler(Office.EventType.DialogMessageReceived, onDialogMessage);
-      fsDialog.addEventHandler(Office.EventType.DialogEventReceived, () => { fsDialog = null; });
-    }
-  );
-}
-
-function onDialogMessage(arg) {
-  let m;
-  try { m = JSON.parse(arg.message); } catch { return; }
-  if (m.type === "save") {
+window.addEventListener("message", (e) => {
+  if (e.origin !== window.location.origin) return;
+  if (!fsWin || e.source !== fsWin) return;
+  const m = e.data;
+  if (!m || typeof m !== "object") return;
+  if (m.type === "ready") {
+    streamRowsToWindow();
+  } else if (m.type === "save") {
     saveFromDialog(m.reqId, m.row, m.edits);
   } else if (m.type === "create") {
     createFromDialog(m.reqId, m.values);
-  } else if (m.type === "getRow") {
-    // On-demand fetch of heavy fields for one row
-    const r = allRows.find(x => x._row === m.row);
-    const values = {};
-    if (r) FS_HEAVY_FIELDS.forEach(f => { values[f] = r[f] == null ? "" : r[f]; });
-    postResultToDialog({ type:"rowDetail", reqId:m.reqId, row:m.row, values:values });
+  }
+});
+
+function openFullscreen() {
+  if (!allRows.length) { showToast("Load data first.","error"); return; }
+  const url = window.location.href.replace(/taskpane\.html.*$/, "fullscreen.html");
+  const w = Math.round(screen.availWidth * 0.96);
+  const h = Math.round(screen.availHeight * 0.92);
+  fsWin = window.open(url, "kittingFullscreen",
+    "width=" + w + ",height=" + h + ",left=" + Math.round((screen.availWidth-w)/2) + ",top=20");
+  if (!fsWin) {
+    showToast("Popup blocked — allow popups for this add-in and try again.", "error");
   }
 }
 
-// Results go back through localStorage; the dialog listens for 'storage' events.
+function streamRowsToWindow() {
+  if (!fsWin) return;
+  const slim = allRows.map(r => FS_FIELDS.map(f => {
+    const v = r[f];
+    return (v === "" || v == null) ? 0 : v;
+  }));
+  fsWin.postMessage({ type:"meta", fields: FS_FIELDS, total: slim.length }, window.location.origin);
+  for (let i = 0; i < slim.length; i += FS_CHUNK) {
+    fsWin.postMessage({ type:"chunk", rows: slim.slice(i, i + FS_CHUNK),
+      done: i + FS_CHUNK >= slim.length }, window.location.origin);
+  }
+}
+
 function postResultToDialog(payload) {
-  try {
-    localStorage.setItem(LS_PREFIX + "result", JSON.stringify(Object.assign({ ts:Date.now() }, payload)));
-  } catch(e) { /* dialog will show its own timeout */ }
+  if (fsWin && !fsWin.closed) fsWin.postMessage(payload, window.location.origin);
 }
 
 async function createFromDialog(reqId, values) {
@@ -731,7 +708,7 @@ async function createFromDialog(reqId, values) {
     const nr = await createRowInSheet(values);
     renderRows();
     const full = allRows.find(r => r._row === nr);
-    const slim = {}; FS_LIGHT_FIELDS.forEach(f => { if (full && full[f] != null) slim[f] = full[f]; });
+    const slim = {}; FS_FIELDS.forEach(f => { if (full && full[f] != null) slim[f] = full[f]; });
     postResultToDialog({ type:"createResult", reqId:reqId, ok:true, row:slim });
   } catch(err) {
     postResultToDialog({ type:"createResult", reqId:reqId, ok:false, error:String(err.message||err) });
