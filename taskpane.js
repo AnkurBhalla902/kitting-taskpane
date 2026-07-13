@@ -655,36 +655,36 @@ function onSaveClick(){ isCreating ? createNewRow() : saveEdits(); }
 //   dialog → pane:  Office messageParent (DialogApi 1.1, universally supported)
 //   pane → dialog results: localStorage + the browser 'storage' event
 let fsDialog = null;
-// Only ship the fields the fullscreen actually uses — keeps localStorage well under quota
-const FS_FIELDS = ["_row","JDE Module","JDE Description","JDE Build number","Business Unit",
+// Light fields streamed to the dialog as arrays (field names sent once, not per row).
+// Heavy comment fields are fetched per-row on demand to stay under localStorage quota.
+const FS_LIGHT_FIELDS = ["_row","JDE Module","JDE Description","JDE Build number","Business Unit",
   "Status","Hospital","Loanset","SAP Module","SAP Serial Number","SAP Description",
-  "Final Shipment Week","Week To Raise Inbound","9SE1 order number","PO","FID ",
-  "Set Reference","Ordering Comment ","S&OP COMMENTS","Kit build comments"];
+  "Final Shipment Week","Week To Raise Inbound","9SE1 order number","PO","FID ","Set Reference"];
+const FS_HEAVY_FIELDS = ["Ordering Comment ","S&OP COMMENTS","Kit build comments"];
 const LS_PREFIX = "kf_";
-const LS_CHUNK_ROWS = 1000;
+const LS_CHUNK_ROWS = 2000;
 
 function openFullscreen() {
   if (!allRows.length) { showToast("Load data first.","error"); return; }
-  // 1. Write slimmed data to localStorage in chunks
+  // 1. Write slimmed data to localStorage in chunks (array format — no repeated keys)
   try {
-    // clear old keys
     for (let i = localStorage.length - 1; i >= 0; i--) {
       const k = localStorage.key(i);
       if (k && k.indexOf(LS_PREFIX) === 0) localStorage.removeItem(k);
     }
-    const slim = allRows.map(r => {
-      const o = {};
-      FS_FIELDS.forEach(f => { const v = r[f]; if (v !== "" && v != null) o[f] = v; });
-      return o;
-    });
-    const nChunks = Math.ceil(slim.length / LS_CHUNK_ROWS);
+    const arrays = allRows.map(r => FS_LIGHT_FIELDS.map(f => {
+      const v = r[f];
+      return (v === "" || v == null) ? 0 : v;   // 0 = empty marker (1 char in JSON)
+    }));
+    const nChunks = Math.ceil(arrays.length / LS_CHUNK_ROWS);
     for (let i = 0; i < nChunks; i++) {
       localStorage.setItem(LS_PREFIX + "chunk_" + i,
-        JSON.stringify(slim.slice(i*LS_CHUNK_ROWS, (i+1)*LS_CHUNK_ROWS)));
+        JSON.stringify(arrays.slice(i*LS_CHUNK_ROWS, (i+1)*LS_CHUNK_ROWS)));
     }
-    localStorage.setItem(LS_PREFIX + "meta", JSON.stringify({ chunks:nChunks, total:slim.length, ts:Date.now() }));
+    localStorage.setItem(LS_PREFIX + "meta",
+      JSON.stringify({ fields: FS_LIGHT_FIELDS, chunks:nChunks, total:arrays.length, ts:Date.now() }));
   } catch(e) {
-    showToast("Couldn't stage data (storage full?): " + e.message, "error");
+    showToast("Couldn't stage data: " + e.message, "error");
     return;
   }
   // 2. Open the dialog — it reads localStorage on load
@@ -710,6 +710,12 @@ function onDialogMessage(arg) {
     saveFromDialog(m.reqId, m.row, m.edits);
   } else if (m.type === "create") {
     createFromDialog(m.reqId, m.values);
+  } else if (m.type === "getRow") {
+    // On-demand fetch of heavy fields for one row
+    const r = allRows.find(x => x._row === m.row);
+    const values = {};
+    if (r) FS_HEAVY_FIELDS.forEach(f => { values[f] = r[f] == null ? "" : r[f]; });
+    postResultToDialog({ type:"rowDetail", reqId:m.reqId, row:m.row, values:values });
   }
 }
 
@@ -725,7 +731,7 @@ async function createFromDialog(reqId, values) {
     const nr = await createRowInSheet(values);
     renderRows();
     const full = allRows.find(r => r._row === nr);
-    const slim = {}; FS_FIELDS.forEach(f => { if (full && full[f] != null) slim[f] = full[f]; });
+    const slim = {}; FS_LIGHT_FIELDS.forEach(f => { if (full && full[f] != null) slim[f] = full[f]; });
     postResultToDialog({ type:"createResult", reqId:reqId, ok:true, row:slim });
   } catch(err) {
     postResultToDialog({ type:"createResult", reqId:reqId, ok:false, error:String(err.message||err) });
