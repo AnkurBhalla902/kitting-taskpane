@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Kitting Flow — Full screen</title>
+<script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+<style>
+* { box-sizing:border-box; }
+:root {
+  --bg:#f7f8fa; --surface:#fff; --surface-2:#f1f3f6;
+  --border:#e3e6eb; --border-strong:#c8cdd5;
+  --text:#1a1f2b; --muted:#6b7280;
+  --accent:#c8102e; --accent-h:#a30d24; --accent-soft:#fdecef;
+  --good:#157f3c; --good-soft:#e6f4ec;
+  --warn:#b45309; --warn-soft:#fef4e3;
+  --bad:#b3261e; --bad-soft:#fdeceb;
+}
+html,body { margin:0; height:100%; background:var(--bg); color:var(--text);
+  font-family:'Segoe UI',-apple-system,sans-serif; font-size:13px; overflow:hidden; }
+#app { display:flex; flex-direction:column; height:100vh; }
+
+/* Top bar */
+.bar { display:flex; align-items:center; gap:10px; padding:8px 14px;
+  background:var(--surface); border-bottom:1px solid var(--border); flex-shrink:0; }
+.logo { width:26px; height:26px; background:var(--accent); color:#fff; border-radius:6px;
+  display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; }
+.bar h1 { margin:0; font-size:14px; font-weight:600; }
+.bar .search-wrap { flex:1; max-width:480px; position:relative; }
+.bar input[type=search] { width:100%; padding:7px 10px; font:13px/1 inherit;
+  border:1px solid var(--border-strong); border-radius:6px; outline:none; }
+.bar input[type=search]:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+.bar select { padding:6px 8px; font:12px/1 inherit; border:1px solid var(--border-strong);
+  border-radius:6px; outline:none; background:var(--surface); }
+.count { font-size:12px; color:var(--muted); white-space:nowrap; }
+.toggle { display:inline-flex; align-items:center; gap:5px; font-size:12px; color:var(--muted);
+  cursor:pointer; user-select:none; white-space:nowrap; }
+.status-msg { font-size:12px; color:var(--muted); }
+
+/* Smart search dropdown */
+.suggest { position:absolute; top:100%; left:0; right:0; z-index:60;
+  background:var(--surface); border:1px solid var(--border-strong); border-radius:0 0 8px 8px;
+  box-shadow:0 8px 24px rgba(0,0,0,.12); max-height:320px; overflow-y:auto; }
+.sg-item { display:flex; align-items:center; gap:8px; padding:7px 12px; cursor:pointer; font-size:12.5px; }
+.sg-item:hover, .sg-item.hot { background:var(--accent-soft); }
+.sg-field { font-size:10.5px; font-weight:600; color:var(--muted); text-transform:uppercase;
+  letter-spacing:.3px; min-width:86px; flex-shrink:0; }
+.sg-val { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sg-val b { color:var(--accent); }
+.sg-n { font-size:11px; color:var(--muted); flex-shrink:0; }
+.sg-plain { border-top:1px solid var(--border); color:var(--muted); font-style:italic; }
+
+/* Active field-filter chip */
+.chip-filter { display:inline-flex; align-items:center; gap:5px; background:var(--accent-soft);
+  color:var(--accent); border:1px solid var(--accent); border-radius:12px;
+  padding:3px 6px 3px 10px; font-size:11.5px; font-weight:600; white-space:nowrap; }
+.chip-filter button { background:none; border:none; color:var(--accent); font-size:14px;
+  cursor:pointer; padding:0 2px; line-height:1; }
+
+/* Table */
+.table-wrap { flex:1; overflow:auto; position:relative; }
+table { border-collapse:collapse; width:max-content; min-width:100%; table-layout:fixed; }
+thead th { position:sticky; top:0; z-index:3; background:var(--surface-2);
+  border-bottom:2px solid var(--border-strong); border-right:1px solid var(--border);
+  padding:7px 10px; font-size:11px; font-weight:600; text-align:left;
+  text-transform:uppercase; letter-spacing:.3px; color:var(--muted);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
+thead th:hover { background:var(--border); }
+thead th .arrow { font-size:9px; margin-left:3px; }
+tbody td { border-bottom:1px solid var(--border); border-right:1px solid var(--border);
+  padding:6px 10px; background:var(--surface); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; font-size:12.5px; }
+tbody tr { cursor:pointer; }
+tbody tr:hover td { background:var(--surface-2); }
+.spacer-row td { border:none; padding:0; background:transparent; }
+.pill { display:inline-block; padding:1px 8px; border-radius:9px; font-size:11px; font-weight:500; }
+.p-good { background:var(--good-soft); color:var(--good); }
+.p-warn { background:var(--warn-soft); color:var(--warn); }
+.p-bad  { background:var(--bad-soft); color:var(--bad); }
+.p-mut  { background:var(--surface-2); color:var(--muted); }
+
+/* Edit panel */
+.panel { position:fixed; top:0; right:0; bottom:0; width:400px; max-width:92vw;
+  background:var(--surface); border-left:1px solid var(--border);
+  box-shadow:-6px 0 20px rgba(0,0,0,.1); z-index:50;
+  display:flex; flex-direction:column; transform:translateX(100%); transition:transform .2s; }
+.panel.open { transform:translateX(0); }
+.panel-head { display:flex; align-items:center; justify-content:space-between;
+  padding:12px 16px; border-bottom:1px solid var(--border); }
+.panel-head h2 { margin:0; font-size:14px; }
+.panel-body { flex:1; overflow-y:auto; padding:12px 16px; }
+.panel-foot { display:flex; justify-content:flex-end; gap:8px; padding:10px 16px;
+  border-top:1px solid var(--border); }
+.f { margin-bottom:10px; }
+.f label { display:block; font-size:11px; color:var(--muted); margin-bottom:2px; }
+.f .ro { font-size:13px; color:var(--muted); font-style:italic; min-height:18px; }
+.f input, .f textarea { width:100%; font:13px/1.4 inherit; padding:6px 8px;
+  border:1px solid var(--border-strong); border-radius:6px; outline:none; }
+.f input:focus, .f textarea:focus { border-color:var(--accent); box-shadow:0 0 0 2px var(--accent-soft); }
+.btn { padding:7px 14px; font:600 12px/1 inherit; border-radius:6px; cursor:pointer; }
+.btn-p { background:var(--accent); color:#fff; border:1px solid var(--accent); }
+.btn-p:hover { background:var(--accent-h); }
+.btn-s { background:var(--surface); color:var(--text); border:1px solid var(--border-strong); }
+.btn-x { background:none; border:none; font-size:22px; color:var(--muted); cursor:pointer; }
+.loading-overlay { position:absolute; inset:0; display:flex; flex-direction:column;
+  align-items:center; justify-content:center; gap:10px; background:var(--bg); z-index:10; }
+.spin { width:28px; height:28px; border:3px solid var(--border);
+  border-top-color:var(--accent); border-radius:50%; animation:sp 0.8s linear infinite; }
+@keyframes sp { to { transform:rotate(360deg); } }
+.toast { position:fixed; bottom:16px; left:50%; transform:translateX(-50%);
+  background:var(--text); color:#fff; padding:8px 14px; border-radius:6px;
+  font-size:12px; z-index:100; }
+.toast.err { background:var(--bad); } .toast.ok { background:var(--good); }
+.hidden { display:none !important; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { background:var(--border-strong); border-radius:5px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="bar">
+    <div class="logo">K</div>
+    <h1>Kitting Flow</h1>
+    <div class="search-wrap">
+      <input id="q" type="search" placeholder="Search anything — loanset, module, hospital, PO, FID…" autocomplete="off" />
+      <div id="suggest" class="suggest hidden"></div>
+    </div>
+    <span id="chip" class="chip-filter hidden"><span id="chip-text"></span><button id="chip-x">×</button></span>
+    <button class="btn btn-p" id="new-btn" style="white-space:nowrap;">+ New row</button>
+    <select id="f-bu"><option value="">All BUs</option></select>
+    <select id="f-status"><option value="">Any status</option></select>
+    <label class="toggle"><input type="checkbox" id="f-hide" checked /> Hide shipped</label>
+    <label class="toggle"><input type="checkbox" id="f-alloc" /> Not allocated only</label>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div class="table-wrap" id="scroller">
+    <div class="loading-overlay" id="loading">
+      <div class="spin"></div>
+      <div class="status-msg" id="load-msg">Waiting for data from the task pane…</div>
+    </div>
+    <table id="tbl">
+      <thead id="thead"></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+
+  <aside class="panel" id="panel">
+    <div class="panel-head">
+      <h2 id="p-title">Details</h2>
+      <button class="btn-x" id="p-close">×</button>
+    </div>
+    <div class="panel-body" id="p-body"></div>
+    <div class="panel-foot">
+      <button class="btn btn-s" id="p-cancel">Cancel</button>
+      <button class="btn btn-p" id="p-save">Save</button>
+    </div>
+  </aside>
+
+  <div class="toast hidden" id="toast"></div>
+</div>
+
+<script>
+/* ═══ Fullscreen Kitting Flow — receives data from task pane, renders virtual table ═══ */
+
+// Columns shown in the table, in order. Width in px.
+const COLUMNS = [
+  { key:"JDE Module",          label:"JDE Module",   w:130 },
+  { key:"JDE Description",     label:"Description",  w:220 },
+  { key:"Business Unit",       label:"BU",           w:110 },
+  { key:"Status",              label:"Status",       w:170, pill:true },
+  { key:"Hospital",            label:"Hospital",     w:200 },
+  { key:"Loanset",             label:"Loanset",      w:100 },
+  { key:"SAP Module",          label:"SAP Module",   w:130 },
+  { key:"SAP Serial Number",   label:"SAP Serial",   w:110 },
+  { key:"Final Shipment Week", label:"Ship wk",      w:90 },
+  { key:"Week To Raise Inbound", label:"Inbound wk", w:95 },
+  { key:"9SE1 order number",   label:"9SE1",         w:110 },
+  { key:"PO",                  label:"PO",           w:110 },
+];
+
+const EDITABLE = new Set(["Status","Hospital","Final Shipment Week","Week To Raise Inbound",
+  "9SE1 order number","PO","Ordering Comment ","S&OP COMMENTS","Kit build comments"]);
+const PANEL_FIELDS = ["JDE Module","JDE Description","Business Unit","Status","Hospital",
+  "Loanset","SAP Module","SAP Serial Number","Final Shipment Week","Week To Raise Inbound",
+  "9SE1 order number","PO","Ordering Comment ","S&OP COMMENTS","Kit build comments"];
+const MULTILINE = new Set(["Ordering Comment ","S&OP COMMENTS","Kit build comments"]);
+const HIDDEN_STATUSES = new Set(["EQUIPMENT SHIPPED","EQUIPMENT DISSOLVED","#REF!"]);
+const UNALLOC = new Set(["Enter Ship To","ORTHOKIT","FORECAST ORDER","Not in Hospital Master"]);
+
+const ROW_H = 32;       // px per row — must match CSS padding+border
+const OVERSCAN = 10;    // extra rows rendered above/below viewport
+
+let rows = [];          // all data
+let view = [];          // filtered
+let editing = null;
+let edits = {};
+let sortKey = null, sortDir = 1;
+let fieldFilter = null; // { field, value } — exact filter set by clicking a suggestion
+let creating = false;   // panel in create-new mode
+
+// Fields the smart-suggest engine scans, with display labels
+const SUGGEST_FIELDS = [
+  ["Hospital","Hospital"], ["Loanset","Loanset"], ["JDE Module","JDE Module"],
+  ["SAP Module","SAP Module"], ["SAP Serial Number","SAP Serial"],
+  ["PO","PO"], ["9SE1 order number","9SE1"], ["Business Unit","BU"],
+  ["Status","Status"], ["Set Reference","Set Ref"], ["FID ","FID"],
+];
+
+// ── receive data from parent via localStorage (same origin as task pane) ──
+// No DialogApi 1.2 needed: data comes through localStorage; results arrive
+// via the browser 'storage' event; edits go up via messageParent (1.1).
+const LS_PREFIX = "kf_";
+let reqCounter = 0;
+let pendingReq = null; // reqId we're waiting on
+
+Office.onReady(() => {
+  loadFromStorage();
+  window.addEventListener("storage", (e) => {
+    if (e.key === LS_PREFIX + "result" && e.newValue) {
+      let m; try { m = JSON.parse(e.newValue); } catch { return; }
+      if (pendingReq !== null && m.reqId !== pendingReq) return;
+      pendingReq = null;
+      if (m.type === "saveResult") onSaveResult(m);
+      else if (m.type === "createResult") onCreateResult(m);
+    }
+  });
+});
+
+function loadFromStorage() {
+  try {
+    const metaRaw = localStorage.getItem(LS_PREFIX + "meta");
+    if (!metaRaw) {
+      document.getElementById("load-msg").textContent =
+        "No data found. Keep the task pane open, click Refresh there, then Expand again.";
+      return;
+    }
+    const meta = JSON.parse(metaRaw);
+    rows = [];
+    for (let i = 0; i < meta.chunks; i++) {
+      const c = localStorage.getItem(LS_PREFIX + "chunk_" + i);
+      if (c) rows.push(...JSON.parse(c));
+      document.getElementById("load-msg").textContent =
+        "Loading… " + Math.round((i+1)/meta.chunks*100) + "% (" + rows.length.toLocaleString() + " rows)";
+    }
+    initTable();
+  } catch(e) {
+    document.getElementById("load-msg").textContent = "Failed to load data: " + e.message;
+  }
+}
+
+function initTable() {
+  document.getElementById("loading").classList.add("hidden");
+  buildHeader();
+  buildFilters();
+  applyFilters();
+  bindEvents();
+}
+
+// ── header ──
+function buildHeader() {
+  const tr = document.createElement("tr");
+  COLUMNS.forEach(c => {
+    const th = document.createElement("th");
+    th.style.width = c.w + "px";
+    th.style.minWidth = c.w + "px";
+    th.textContent = c.label;
+    th.dataset.key = c.key;
+    th.addEventListener("click", () => {
+      if (sortKey === c.key) sortDir = -sortDir;
+      else { sortKey = c.key; sortDir = 1; }
+      applyFilters();
+    });
+    tr.appendChild(th);
+  });
+  document.getElementById("thead").innerHTML = "";
+  document.getElementById("thead").appendChild(tr);
+}
+
+// ── filters ──
+function buildFilters() {
+  fillSelect("f-bu", "Business Unit");
+  fillSelect("f-status", "Status");
+}
+function fillSelect(id, col) {
+  const el = document.getElementById(id);
+  const seen = new Set();
+  rows.forEach(r => { const v = r[col]; if (v && v !== "#REF!") seen.add(String(v)); });
+  [...seen].sort().forEach(v => {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v; el.appendChild(o);
+  });
+}
+
+function bindEvents() {
+  const q = document.getElementById("q");
+  q.addEventListener("input", debounce(() => { updateSuggestions(); applyFilters(); }, 150));
+  q.addEventListener("keydown", e => { if (e.key === "Escape") hideSuggest(); });
+  q.addEventListener("blur", () => setTimeout(hideSuggest, 180)); // allow click on suggestion
+  q.addEventListener("focus", () => { if (q.value.trim()) updateSuggestions(); });
+  document.getElementById("chip-x").addEventListener("click", clearFieldFilter);
+  document.getElementById("new-btn").addEventListener("click", openCreatePanel);
+  document.getElementById("f-bu").addEventListener("change", applyFilters);
+  document.getElementById("f-status").addEventListener("change", applyFilters);
+  document.getElementById("f-hide").addEventListener("change", applyFilters);
+  document.getElementById("f-alloc").addEventListener("change", applyFilters);
+  document.getElementById("scroller").addEventListener("scroll", throttleRender);
+  document.getElementById("p-close").addEventListener("click", closePanel);
+  document.getElementById("p-cancel").addEventListener("click", closePanel);
+  document.getElementById("p-save").addEventListener("click", savePanel);
+}
+
+// ── smart suggestions ──
+function updateSuggestions() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const box = document.getElementById("suggest");
+  if (q.length < 2) { hideSuggest(); return; }
+
+  // Scan each field for distinct matching values (prefix matches rank first)
+  const perField = [];
+  for (const [field, label] of SUGGEST_FIELDS) {
+    const matches = new Map(); // value -> count
+    for (const r of rows) {
+      const v = r[field];
+      if (v == null || v === "" || v === "#REF!") continue;
+      const s = String(v);
+      if (s.toLowerCase().includes(q)) {
+        matches.set(s, (matches.get(s) || 0) + 1);
+      }
+    }
+    if (!matches.size) continue;
+    // Rank: prefix matches first, then by count
+    const ranked = [...matches.entries()].sort((a, b) => {
+      const pa = a[0].toLowerCase().startsWith(q) ? 0 : 1;
+      const pb = b[0].toLowerCase().startsWith(q) ? 0 : 1;
+      if (pa !== pb) return pa - pb;
+      return b[1] - a[1];
+    }).slice(0, 3);
+    perField.push({ field, label, ranked, total: matches.size });
+  }
+
+  if (!perField.length) { hideSuggest(); return; }
+
+  // Order fields by best-match quality (any prefix hit first), cap 9 rows total
+  perField.sort((a, b) => {
+    const pa = a.ranked[0][0].toLowerCase().startsWith(q) ? 0 : 1;
+    const pb = b.ranked[0][0].toLowerCase().startsWith(q) ? 0 : 1;
+    return pa - pb;
+  });
+
+  let count = 0;
+  const parts = [];
+  for (const pf of perField) {
+    for (const [val, n] of pf.ranked) {
+      if (count >= 9) break;
+      count++;
+      const hl = highlight(val, q);
+      parts.push(`<div class="sg-item" data-field="${escA(pf.field)}" data-val="${escA(val)}">
+        <span class="sg-field">${esc(pf.label)}</span>
+        <span class="sg-val">${hl}</span>
+        <span class="sg-n">${n} row${n===1?"":"s"}</span>
+      </div>`);
+    }
+    if (count >= 9) break;
+  }
+  parts.push(`<div class="sg-item sg-plain" data-plain="1">Search all fields for "${esc(q)}" ↵</div>`);
+  box.innerHTML = parts.join("");
+  box.classList.remove("hidden");
+
+  box.querySelectorAll(".sg-item").forEach(it => {
+    it.addEventListener("mousedown", e => {
+      e.preventDefault();
+      if (it.dataset.plain) { hideSuggest(); applyFilters(); return; }
+      setFieldFilter(it.dataset.field, it.dataset.val);
+    });
+  });
+}
+function highlight(val, q) {
+  const i = val.toLowerCase().indexOf(q);
+  if (i < 0) return esc(val);
+  return esc(val.slice(0,i)) + "<b>" + esc(val.slice(i, i+q.length)) + "</b>" + esc(val.slice(i+q.length));
+}
+function hideSuggest() { document.getElementById("suggest").classList.add("hidden"); }
+
+function setFieldFilter(field, value) {
+  fieldFilter = { field, value };
+  document.getElementById("q").value = "";
+  hideSuggest();
+  const label = SUGGEST_FIELDS.find(f => f[0] === field);
+  document.getElementById("chip-text").textContent = (label ? label[1] : field) + ": " + value;
+  document.getElementById("chip").classList.remove("hidden");
+  applyFilters();
+}
+function clearFieldFilter() {
+  fieldFilter = null;
+  document.getElementById("chip").classList.add("hidden");
+  applyFilters();
+}
+
+const SEARCH_KEYS = ["JDE Module","JDE Description","JDE Build number","SAP Module",
+  "SAP Serial Number","SAP Description","Hospital","Loanset","Set Reference",
+  "9SE1 order number","PO","FID ","Ordering Comment ","S&OP COMMENTS","Kit build comments"];
+
+function applyFilters() {
+  const q = document.getElementById("q").value.trim().toLowerCase();
+  const bu = document.getElementById("f-bu").value;
+  const st = document.getElementById("f-status").value;
+  const hide = document.getElementById("f-hide").checked;
+  const unallocOnly = document.getElementById("f-alloc").checked;
+
+  view = rows.filter(r => {
+    if (hide && HIDDEN_STATUSES.has(String(r["Status"]||""))) return false;
+    if (fieldFilter && String(r[fieldFilter.field]||"") !== fieldFilter.value) return false;
+    if (bu && String(r["Business Unit"]||"") !== bu) return false;
+    if (st && String(r["Status"]||"") !== st) return false;
+    if (unallocOnly) {
+      const h = String(r["Hospital"]||"").trim();
+      const isAlloc = h !== "" && !UNALLOC.has(h);
+      if (isAlloc) return false;
+    }
+    if (q) {
+      let hit = false;
+      for (const k of SEARCH_KEYS) {
+        const v = r[k];
+        if (v != null && String(v).toLowerCase().includes(q)) { hit = true; break; }
+      }
+      if (!hit) return false;
+    }
+    return true;
+  });
+
+  if (sortKey) {
+    view.sort((a,b) => {
+      const va = a[sortKey], vb = b[sortKey];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1; if (vb == null) return -1;
+      const na = Number(va), nb = Number(vb);
+      if (!isNaN(na) && !isNaN(nb)) return (na-nb)*sortDir;
+      return String(va).localeCompare(String(vb))*sortDir;
+    });
+  }
+
+  document.getElementById("count").textContent = view.length.toLocaleString() + " / " + rows.length.toLocaleString();
+  renderVirtual(true);
+}
+
+// ── virtual scroll rendering ──
+let renderQueued = false;
+function throttleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; renderVirtual(false); });
+}
+
+function renderVirtual(reset) {
+  const scroller = document.getElementById("scroller");
+  if (reset) scroller.scrollTop = 0;
+  const scrollTop = scroller.scrollTop;
+  const height = scroller.clientHeight;
+
+  const first = Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN);
+  const visCount = Math.ceil(height / ROW_H) + OVERSCAN*2;
+  const last = Math.min(view.length, first + visCount);
+
+  const topPad = first * ROW_H;
+  const botPad = (view.length - last) * ROW_H;
+
+  const tbody = document.getElementById("tbody");
+  const parts = [];
+  if (topPad > 0) parts.push(`<tr class="spacer-row"><td colspan="${COLUMNS.length}" style="height:${topPad}px"></td></tr>`);
+  for (let i = first; i < last; i++) {
+    const r = view[i];
+    parts.push(`<tr data-i="${i}">` + COLUMNS.map(c => {
+      let v = r[c.key];
+      v = v == null ? "" : String(v);
+      let inner = esc(v);
+      if (c.pill && v) inner = `<span class="pill ${pillClass(v)}">${esc(v)}</span>`;
+      return `<td style="width:${c.w}px;min-width:${c.w}px" title="${esc(v)}">${inner}</td>`;
+    }).join("") + "</tr>");
+  }
+  if (botPad > 0) parts.push(`<tr class="spacer-row"><td colspan="${COLUMNS.length}" style="height:${botPad}px"></td></tr>`);
+  tbody.innerHTML = parts.join("");
+
+  tbody.querySelectorAll("tr[data-i]").forEach(tr => {
+    tr.addEventListener("click", () => openPanel(view[parseInt(tr.dataset.i,10)]));
+  });
+}
+
+function pillClass(v) {
+  const s = v.toLowerCase();
+  if (s.includes("shipped")||s.includes("built")) return "p-good";
+  if (s.includes("issue")||s==="#ref!") return "p-bad";
+  if (s.includes("await")||s.includes("orthokit")||s.includes("topup")) return "p-warn";
+  return "p-mut";
+}
+
+// ── create new row (fullscreen) ──
+const CREATE_FIELDS = [
+  { k:"JDE Module",           req:true },
+  { k:"JDE Description",      req:true },
+  { k:"Business Unit",        req:true,  list:true },
+  { k:"Hospital",             req:true,  list:true },
+  { k:"JDE Build number" },
+  { k:"SAP Module" },
+  { k:"SAP Serial Number" },
+  { k:"Loanset" },
+  { k:"Status",               list:true },
+  { k:"Final Shipment Week" },
+  { k:"Week To Raise Inbound" },
+  { k:"9SE1 order number" },
+  { k:"PO" },
+  { k:"Ordering Comment ",    ml:true },
+  { k:"S&OP COMMENTS",        ml:true },
+];
+
+function openCreatePanel() {
+  creating = true; editing = null; edits = {};
+  document.getElementById("p-title").textContent = "New row";
+  document.getElementById("p-save").textContent = "Create";
+  const body = document.getElementById("p-body");
+  body.innerHTML = "";
+  CREATE_FIELDS.forEach(f => {
+    const div = document.createElement("div"); div.className = "f";
+    const lbl = document.createElement("label");
+    lbl.textContent = f.k.trim() + (f.req ? " *" : "");
+    div.appendChild(lbl);
+    const inp = f.ml ? document.createElement("textarea") : document.createElement("input");
+    if (f.ml) inp.rows = 3;
+    inp.dataset.k = f.k;
+    if (f.req) inp.dataset.req = "1";
+    if (f.list) {
+      // datalist autocomplete from existing values
+      const dlId = "dl-" + f.k.replace(/\W/g,"");
+      let dl = document.getElementById(dlId);
+      if (!dl) {
+        dl = document.createElement("datalist"); dl.id = dlId;
+        const seen = new Set();
+        rows.forEach(r => { const v = r[f.k]; if (v && v !== "#REF!") seen.add(String(v)); });
+        [...seen].sort().slice(0, 200).forEach(v => {
+          const o = document.createElement("option"); o.value = v; dl.appendChild(o);
+        });
+        document.body.appendChild(dl);
+      }
+      inp.setAttribute("list", dlId);
+    }
+    inp.addEventListener("input", () => { edits[f.k] = inp.value; inp.style.borderColor = ""; });
+    div.appendChild(inp);
+    body.appendChild(div);
+  });
+  document.getElementById("panel").classList.add("open");
+}
+
+function onCreateResult(m) {
+  const btn = document.getElementById("p-save");
+  btn.disabled = false; btn.textContent = "Create";
+  if (m.ok) {
+    rows.push(m.row);
+    toast("Row created in Excel (row " + m.row._row + ") — formulas copied", "ok");
+    creating = false;
+    closePanel();
+    applyFilters();
+  } else {
+    toast("Create failed: " + (m.error||"unknown"), "err");
+  }
+}
+
+// ── edit panel ──
+function openPanel(row) {
+  creating = false;
+  editing = row; edits = {};
+  document.getElementById("p-save").textContent = "Save";
+  document.getElementById("p-title").textContent = row["JDE Module"] || "Details";
+  const body = document.getElementById("p-body");
+  body.innerHTML = "";
+  PANEL_FIELDS.forEach(k => {
+    const div = document.createElement("div"); div.className = "f";
+    const lbl = document.createElement("label"); lbl.textContent = k.trim();
+    div.appendChild(lbl);
+    if (!EDITABLE.has(k)) {
+      const ro = document.createElement("div"); ro.className = "ro";
+      ro.textContent = editing[k] == null ? "" : String(editing[k]);
+      div.appendChild(ro);
+    } else {
+      const inp = MULTILINE.has(k) ? document.createElement("textarea") : document.createElement("input");
+      if (MULTILINE.has(k)) inp.rows = 3;
+      inp.value = editing[k] == null ? "" : String(editing[k]);
+      inp.addEventListener("input", () => { edits[k] = inp.value; });
+      div.appendChild(inp);
+    }
+    body.appendChild(div);
+  });
+  document.getElementById("panel").classList.add("open");
+}
+function closePanel() {
+  document.getElementById("panel").classList.remove("open");
+  document.getElementById("p-save").textContent = "Save";
+  editing = null; edits = {}; creating = false;
+}
+function savePanel() {
+  if (creating) {
+    // Validate required fields
+    const missing = [];
+    document.querySelectorAll("#p-body [data-req]").forEach(inp => {
+      if (!inp.value.trim()) { missing.push(inp.dataset.k.trim()); inp.style.borderColor = "var(--bad)"; }
+    });
+    if (missing.length) { toast("Fill in: " + missing.join(", "), "err"); return; }
+    const btn = document.getElementById("p-save");
+    btn.disabled = true; btn.textContent = "Creating…";
+    pendingReq = ++reqCounter;
+    Office.context.ui.messageParent(JSON.stringify({ type:"create", reqId:pendingReq, values: edits }));
+    return;
+  }
+  if (!editing || !Object.keys(edits).length) { closePanel(); return; }
+  const btn = document.getElementById("p-save");
+  btn.disabled = true; btn.textContent = "Saving…";
+  pendingReq = ++reqCounter;
+  // Ask the parent (task pane) to write to Excel
+  Office.context.ui.messageParent(JSON.stringify({
+    type: "save",
+    reqId: pendingReq,
+    row: editing._row,
+    edits: edits,
+  }));
+}
+function onSaveResult(m) {
+  const btn = document.getElementById("p-save");
+  btn.disabled = false; btn.textContent = "Save";
+  if (m.ok) {
+    // update local copy
+    if (editing && editing._row === m.row) {
+      Object.keys(m.edits).forEach(k => { editing[k] = m.edits[k]; });
+    } else {
+      const r = rows.find(x => x._row === m.row);
+      if (r) Object.keys(m.edits).forEach(k => { r[k] = m.edits[k]; });
+    }
+    toast("Saved", "ok");
+    closePanel();
+    renderVirtual(false);
+  } else {
+    toast("Save failed: " + (m.error||"unknown"), "err");
+  }
+}
+
+// ── utils ──
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':"&amp;",'<':"&lt;",'>':"&gt;",'"':"&quot;","'":'&#39;'}[c])); }
+function escA(s){ return esc(s); }
+function debounce(fn,ms){ let t; return function(){ clearTimeout(t); t=setTimeout(()=>fn.apply(this,arguments),ms); }; }
+function toast(msg,kind){
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.className = "toast " + (kind||"");
+  setTimeout(() => { t.className = "toast hidden"; }, 2400);
+}
+</script>
+</body>
+</html>
