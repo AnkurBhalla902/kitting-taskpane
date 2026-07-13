@@ -206,39 +206,45 @@ const SUGGEST_FIELDS = [
   ["Status","Status"], ["Set Reference","Set Ref"], ["FID ","FID"],
 ];
 
-// ── receive data from parent ──
+// ── receive data from parent via localStorage (same origin as task pane) ──
+// No DialogApi 1.2 needed: data comes through localStorage; results arrive
+// via the browser 'storage' event; edits go up via messageParent (1.1).
+const LS_PREFIX = "kf_";
+let reqCounter = 0;
+let pendingReq = null; // reqId we're waiting on
+
 Office.onReady(() => {
-  try {
-    Office.context.ui.addHandlerAsync(
-      Office.EventType.DialogParentMessageReceived,
-      (arg) => { handleParentMessage(arg.message); }
-    );
-    // tell parent we're ready
-    Office.context.ui.messageParent(JSON.stringify({ type:"ready" }));
-  } catch(e) {
-    document.getElementById("load-msg").textContent = "Failed to connect to task pane: " + e.message;
-  }
+  loadFromStorage();
+  window.addEventListener("storage", (e) => {
+    if (e.key === LS_PREFIX + "result" && e.newValue) {
+      let m; try { m = JSON.parse(e.newValue); } catch { return; }
+      if (pendingReq !== null && m.reqId !== pendingReq) return;
+      pendingReq = null;
+      if (m.type === "saveResult") onSaveResult(m);
+      else if (m.type === "createResult") onCreateResult(m);
+    }
+  });
 });
 
-let expected = 0, received = 0;
-function handleParentMessage(msg) {
-  let m;
-  try { m = JSON.parse(msg); } catch { return; }
-  if (m.type === "meta") {
-    expected = m.chunks;
-    received = 0;
+function loadFromStorage() {
+  try {
+    const metaRaw = localStorage.getItem(LS_PREFIX + "meta");
+    if (!metaRaw) {
+      document.getElementById("load-msg").textContent =
+        "No data found. Keep the task pane open, click Refresh there, then Expand again.";
+      return;
+    }
+    const meta = JSON.parse(metaRaw);
     rows = [];
-    document.getElementById("load-msg").textContent = "Receiving data… 0%";
-  } else if (m.type === "chunk") {
-    rows.push(...m.rows);
-    received++;
-    const pct = Math.round(received / expected * 100);
-    document.getElementById("load-msg").textContent = "Receiving data… " + pct + "% (" + rows.length.toLocaleString() + " rows)";
-    if (received >= expected) initTable();
-  } else if (m.type === "saveResult") {
-    onSaveResult(m);
-  } else if (m.type === "createResult") {
-    onCreateResult(m);
+    for (let i = 0; i < meta.chunks; i++) {
+      const c = localStorage.getItem(LS_PREFIX + "chunk_" + i);
+      if (c) rows.push(...JSON.parse(c));
+      document.getElementById("load-msg").textContent =
+        "Loading… " + Math.round((i+1)/meta.chunks*100) + "% (" + rows.length.toLocaleString() + " rows)";
+    }
+    initTable();
+  } catch(e) {
+    document.getElementById("load-msg").textContent = "Failed to load data: " + e.message;
   }
 }
 
@@ -599,15 +605,18 @@ function savePanel() {
     if (missing.length) { toast("Fill in: " + missing.join(", "), "err"); return; }
     const btn = document.getElementById("p-save");
     btn.disabled = true; btn.textContent = "Creating…";
-    Office.context.ui.messageParent(JSON.stringify({ type:"create", values: edits }));
+    pendingReq = ++reqCounter;
+    Office.context.ui.messageParent(JSON.stringify({ type:"create", reqId:pendingReq, values: edits }));
     return;
   }
   if (!editing || !Object.keys(edits).length) { closePanel(); return; }
   const btn = document.getElementById("p-save");
   btn.disabled = true; btn.textContent = "Saving…";
+  pendingReq = ++reqCounter;
   // Ask the parent (task pane) to write to Excel
   Office.context.ui.messageParent(JSON.stringify({
     type: "save",
+    reqId: pendingReq,
     row: editing._row,
     edits: edits,
   }));
