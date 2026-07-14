@@ -50,9 +50,9 @@ const FILTER_DROPDOWNS = [
 
 const DETAIL_GROUPS = [
   { title:"Identification", fields:[
-    {name:"JDE Module"},{name:"JDE Description"},{name:"JDE Build number"},
-    {name:"Module_Build"},{name:"SAP Module"},{name:"SAP Serial Number"},
-    {name:"SAP Description"},{name:"Business Unit"},{name:"Loanset"},
+    {name:"JDE Module",editable:true},{name:"JDE Description"},{name:"JDE Build number",editable:true},
+    {name:"Module_Build"},{name:"SAP Module",editable:true},{name:"SAP Serial Number",editable:true},
+    {name:"SAP Description"},{name:"Business Unit"},{name:"Loanset",editable:true},
   ]},
   { title:"Status & allocation", fields:[
     {name:"Status",editable:true},{name:"Equipment status",editable:true},
@@ -135,6 +135,7 @@ function bindUi() {
   document.getElementById("close-drawer").addEventListener("click", closeDrawer);
   document.getElementById("cancel-edit").addEventListener("click", closeDrawer);
   document.getElementById("save-edit").addEventListener("click", onSaveClick);
+  document.getElementById("dup-row").addEventListener("click", duplicateCurrentRow);
 }
 
 // ── FILTER PANEL ──
@@ -634,6 +635,7 @@ function weekColHtml(col, isCollapsed) {
 // ── DRAWER ──
 function openDrawer(row) {
   isCreating=false; editingRow=row; editedValues={};
+  document.getElementById("dup-row").style.display = "";
   document.getElementById("save-edit").textContent="Save changes";
   document.getElementById("detail-title").textContent=displayValue(row[CARD_FIELDS.primary])||"Module details";
   const el=document.getElementById("detail-fields"); el.innerHTML="";
@@ -665,6 +667,7 @@ function buildField(def, value) {
 function openCreateDrawer() {
   if (!allHeaders.length) { showToast("Load data first.","error"); return; }
   isCreating=true; editingRow=null; editedValues={};
+  document.getElementById("dup-row").style.display = "none";
   document.getElementById("save-edit").textContent="Create row";
   document.getElementById("detail-title").textContent="New row";
   const el=document.getElementById("detail-fields"); el.innerHTML="";
@@ -693,6 +696,66 @@ function closeDrawer() {
   editingRow=null; editedValues={}; isCreating=false;
 }
 function onSaveClick(){ isCreating ? createNewRow() : saveEdits(); }
+
+// Copy the currently-open row's values into a NEW row inserted directly below it.
+// Uses Excel's insert + formula-fill so (Auto) columns keep working.
+async function duplicateCurrentRow() {
+  if (!editingRow) return;
+  const srcRow = editingRow._row;
+  // Fields to carry over — everything editable/identifying, not the Auto formulas
+  const CARRY = ["JDE Module","JDE Description","JDE Build number","Module_Build",
+    "SAP Module","SAP Serial Number","SAP Description","Business Unit","Loanset",
+    "Status","Equipment status","Hospital","Allocated Country","HospitalContact",
+    "Final Shipment Week","Set Reference","FID ","Week To Raise Inbound",
+    "9SE1 order number","PO","YU /PR","Requested By",
+    "Ordering Comment ","S&OP COMMENTS","Kit build comments"];
+  // Apply any unsaved edits from the open drawer to the copied values
+  const values = {};
+  CARRY.forEach(k => {
+    if (k in editedValues) values[k] = editedValues[k];
+    else if (editingRow[k] != null) values[k] = editingRow[k];
+  });
+
+  const btn = document.getElementById("dup-row");
+  btn.disabled = true; btn.textContent = "Copying…";
+  try {
+    const newRowNum = srcRow + 1;
+    await Excel.run(async ctx => {
+      const sheet = ctx.workbook.worksheets.getItem(SHEET_NAME);
+      const lastCol = colLetter(allHeaders.length - 1);
+      // Insert a blank row below the source (shifts everything down)
+      const insertAt = sheet.getRange("A" + newRowNum + ":" + lastCol + newRowNum);
+      insertAt.insert(Excel.InsertShiftDirection.down);
+      // Copy formulas from the source row so relative refs adjust
+      const newRange = sheet.getRange("A" + newRowNum + ":" + lastCol + newRowNum);
+      newRange.copyFrom("A" + srcRow + ":" + lastCol + srcRow, Excel.RangeCopyType.formulas);
+      newRange.load("formulas");
+      await ctx.sync();
+      // Keep formulas; overwrite carried value cells; clear other copied constants
+      const copied = newRange.formulas[0];
+      const out = copied.map((cell, i) => {
+        const col = allHeaders[i];
+        if (values[col] !== undefined && values[col] !== "") return values[col];
+        if (typeof cell === "string" && cell.charAt(0) === "=") return cell;
+        return "";
+      });
+      newRange.formulas = [out];
+      sheet.getRange("A" + newRowNum).select();
+      await ctx.sync();
+    });
+    // Inserting a row shifts every _row below srcRow down by one — update cache
+    allRows.forEach(r => { if (r._row > srcRow) r._row += 1; });
+    const obj = { _row: newRowNum };
+    allHeaders.forEach(h => { obj[h] = values[h] !== undefined ? values[h] : ""; });
+    allRows.push(obj);
+    showToast("Copied to new row " + newRowNum + " — formulas preserved", "success");
+    populateFilterDropdowns(); applyFilters(); closeDrawer();
+  } catch(err) {
+    showToast("Copy failed: " + (err.message||err), "error");
+  } finally {
+    btn.disabled = false; btn.textContent = "⧉ Copy to new row";
+  }
+}
 
 // ── WIDE TABLE MODE ───────────────────────
 // No popup, no separate file. Toggles the Browse list between compact cards
