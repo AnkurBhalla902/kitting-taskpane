@@ -46,6 +46,7 @@ const FILTER_DROPDOWNS = [
   { id:"filter-bu",      column:"Business Unit",         limit:30 },
   { id:"filter-status",  column:"Status",                limit:15 },
   { id:"filter-week-in", column:"Week To Raise Inbound", limit:60, sort:"weekish" },
+  { id:"filter-week-out",column:"Final Shipment Week",   limit:60, sort:"weekish" },
 ];
 
 const DETAIL_GROUPS = [
@@ -63,14 +64,17 @@ const DETAIL_GROUPS = [
   ]},
   { title:"Destination", fields:[
     {name:"Hospital",editable:true},{name:"Allocated Country",editable:true},
-    {name:"HospitalContact",editable:true},{name:"Final Shipment Week",editable:true},
+    {name:"HospitalContact",editable:true},
     {name:"Set Reference",editable:true},{name:"FID ",editable:true},
   ]},
-  { title:"Ordering", fields:[
-    {name:"Week To Raise Inbound",editable:true},{name:"9SE1 order number",editable:true},
+  { title:"Inbound / Outbound", fields:[
+    {name:"Week To Raise Inbound",label:"Week to raise INBOUND",editable:true},
+    {name:"9SE1 order number",label:"Inbound order no. (9SE1)",editable:true},
+    {name:"Week Inbound Raised",label:"Week inbound raised",editable:true},
+    {name:"Raise 9SE2",label:"Outbound order no. (9SE2)",editable:true},
+    {name:"Final Shipment Week",label:"Outbound / shipment week",editable:true},
     {name:"PO",editable:true},{name:"YU /PR",editable:true},
-    {name:"Week Inbound Raised",editable:true},{name:"Requested By",editable:true},
-    {name:"Raise 9SE2",editable:true},
+    {name:"Requested By",editable:true},
   ]},
   { title:"Comments", fields:[
     {name:"Ordering Comment ",editable:true,multiline:true},
@@ -204,7 +208,9 @@ function applyFilters() {
       if (!rowSap.includes(activeFilters.sapModule.toLowerCase())) return false;
     }
     for (const col of Object.keys(dropVals)) {
-      if (String(row[col]??"") !== dropVals[col]) return false;
+      if (col === "Business Unit") {
+        if (buGroup(row[col]) !== dropVals[col]) return false;
+      } else if (String(row[col]??"") !== dropVals[col]) return false;
     }
     if (q) {
       const hay = SEARCH_FIELDS.map(f => row[f]==null?"":String(row[f]).toLowerCase()).join("|");
@@ -217,16 +223,24 @@ function applyFilters() {
   renderRows();
 }
 
+// Business Units that get merged into a single "JOINTS" filter option
+const JOINTS_BUS = new Set(["KNEES","SHOULDERS"]);
+function buGroup(v) {
+  const up = String(v).trim().toUpperCase();
+  return JOINTS_BUS.has(up) ? "JOINTS" : String(v).trim();
+}
+
 function populateFilterDropdowns() {
   FILTER_DROPDOWNS.forEach(f => {
     const el = document.getElementById(f.id);
     const first = el.querySelector("option");
     el.innerHTML = ""; el.appendChild(first);
     const seen = new Set();
+    const isBU = (f.column === "Business Unit");
     for (const row of allRows) {
       const v = row[f.column];
       if (v==null||v===""||String(v)==="#REF!") continue;
-      seen.add(String(v));
+      seen.add(isBU ? buGroup(v) : String(v));
     }
     [...seen].sort(pickSorter(f.sort)).slice(0, f.limit).forEach(v => {
       const o = document.createElement("option");
@@ -436,6 +450,7 @@ function renderDashboard() {
   const bekCounts=countBy(active,"BEK Status (Auto)", v => v&&v!=="NOT IN BEK");
   const folCounts=countBy(active,"FOL Status (Auto)", v => v&&v!=="#REF!"&&v!=="Please enter FOL ID");
   const weekInCounts=countBy(active,"Week To Raise Inbound", v => v&&v!=="#REF!");
+  const weekOutCounts=countBy(active,"Final Shipment Week", v => v&&v!=="#REF!");
   const forecastCounts=countBy(active,"ForecastMonth", v => v&&v!=="#REF!");
   const hospitalCounts=countBy(allocated,"Hospital", v => v&&!["Enter Ship To","ORTHOKIT","FORECAST ORDER","Not in Hospital Master",""].includes(v));
   const reasonCounts=countBy(unallocated,"Hospital", v => v!=="");
@@ -456,7 +471,8 @@ function renderDashboard() {
       </div>` },
     { key:"bek",      title:"BEK status",                default:"open",     html:listTile(bekCounts,6,true) },
     { key:"fol",      title:"FOL status",                default:"closed",   html:listTile(folCounts,6,true) },
-    { key:"weekin",   title:"Upcoming inbound weeks",    default:"closed",   html:listTile(sortCountsForWeek(weekInCounts),10,false) },
+    { key:"weekin",   title:"Weekly inbound (9SE1)",     default:"closed",   html:listTile(sortCountsForWeek(weekInCounts),10,false) },
+    { key:"weekout",  title:"Weekly outbound (9SE2)",    default:"closed",   html:listTile(sortCountsForWeek(weekOutCounts),10,false) },
     { key:"forecast", title:"Upcoming forecast months",  default:"closed",   html:listTile(sortCountsByMonthYear(forecastCounts),10,false) },
     { key:"hospitals",title:"Top hospitals",             default:"closed",   html:listTile(hospitalCounts,10,true) },
   ];
@@ -527,7 +543,7 @@ function sortCountsByMonthYear(counts) {
   });
 }
 function dispatchDashboardAction(value) {
-  const candidates=["filter-status","filter-week-in","filter-bu"];
+  const candidates=["filter-status","filter-week-in","filter-week-out","filter-bu"];
   for (const id of candidates) {
     const sel=document.getElementById(id);
     if (!sel) continue;
@@ -650,7 +666,7 @@ function openDrawer(row) {
 }
 function buildField(def, value) {
   const wrap=document.createElement("div"); wrap.className="field"+(def.editable?"":" readonly");
-  const lbl=document.createElement("label"); lbl.className="field-label"; lbl.textContent=def.name.trim();
+  const lbl=document.createElement("label"); lbl.className="field-label"; lbl.textContent=def.label || def.name.trim();
   wrap.appendChild(lbl);
   if (!def.editable) {
     const v=document.createElement("div"); v.className="field-value"; v.textContent=displayValue(value);
@@ -770,9 +786,10 @@ const WIDE_COLUMNS = [
   { key:"Hospital",           label:"Hospital",    w:170 },
   { key:"Loanset",            label:"Loanset",     w:90  },
   { key:"SAP Module",         label:"SAP Mod",     w:110 },
-  { key:"Final Shipment Week",label:"Ship wk",     w:80  },
-  { key:"Week To Raise Inbound",label:"Inb wk",    w:75  },
-  { key:"9SE1 order number",  label:"9SE1",        w:100 },
+  { key:"Final Shipment Week",label:"Outbound wk",  w:90  },
+  { key:"Week To Raise Inbound",label:"Inbound wk", w:90  },
+  { key:"9SE1 order number",  label:"Inbound (9SE1)", w:120 },
+  { key:"Raise 9SE2",         label:"Outbound (9SE2)",w:120 },
   { key:"PO",                 label:"PO",          w:100 },
 ];
 
